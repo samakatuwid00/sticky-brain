@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output (large binaries — the installer is produced by `npm run dist`)
+dist/
+
+# Temp / extraction artifacts
+extracted-asar/
+bundle-check/
+*.tmp-launch/
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
