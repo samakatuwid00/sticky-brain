@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-density="default">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'">
+<title>Sticky Brain</title>
+<link rel="stylesheet" href="board.css">
+</head>
+<body>
+<div id="niko-rail" aria-hidden="true"></div>
+<!-- SB: Feature 2 · the pet's hit area. The rail itself stays pointer-events:none — it spans the
+     full window width and making all of it clickable would turn the empty transparent strip either
+     side of him into a click target. This box tracks the sprite instead and takes every gesture:
+     click, double-click, right-click, hover and drag. -->
+<div id="niko-hit" title="Niko — click to say hi · double-click for the board · right-click for more"></div>
+<!-- SB: Feature 2 · speech bubble. Text only; the pet's own fx (♥ ♪ ✦ z) stay inside the sprite. -->
+<div id="niko-bubble" class="hidden" aria-hidden="true"></div>
+<div id="shell">
+  <div id="titlebar">
+    <span class="dot"></span>
+    <span class="name">STICKY BRAIN</span>
+    <span class="keys">
+      <button class="key" id="k-density" title="Density — compact (d)">d</button>
+      <button class="key" id="k-theme" title="Theme — light/dark (t)">t</button>
+      <!-- SB: fullscreen toggle. The glyph flips to ⤡ once expanded. -->
+      <button class="key" id="k-full" title="Fullscreen dashboard (f)">⤢</button>
+      <!-- SB: Feature 1 · × shrinks to Niko rather than hiding. Named so on the tooltip, because
+           a × that does not close is otherwise a surprise. -->
+      <button class="key" id="k-close" title="Shrink to Niko — click him to come back">&times;</button>
+    </span>
+  </div>
+
+  <div id="scroll"><div id="body"></div></div>
+
+  <div id="footer">
+    <span id="f-sources" class="ok">reading 4 sources</span>
+    <span id="f-age">·</span>
+    <span class="keys">&uarr;&darr; · a · s · p</span>
+    <span id="f-of" class="of">—</span>
+  </div>
+</div>
+
+<!-- SB: overview modal — every item in one category, in the app, with a preview. No file jump. -->
+<div id="overview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="modal-title"></h3>
+      <span id="modal-count"></span>
+      <button id="modal-close" title="Close (Esc)">&times;</button>
+    </div>
+    <input type="text" id="modal-search" placeholder="Search tasks…" autocomplete="off" spellcheck="false">
+    <div class="modal-split">
+      <div id="modal-list"></div>
+      <div id="modal-preview"><div class="ph">Select an item to preview it.</div></div>
+    </div>
+    <div class="modal-foot">
+      <span id="modal-hint">↵ open in hermes · esc close</span>
+      <button id="modal-reveal">reveal source file ›</button>
+    </div>
+  </div>
+</div>
+
+<!-- SB: one-line result line for actions that finish outside the board (focus, hermes). -->
+<div id="toast" class="hidden"></div>
+
+<script src="vendor/niko.js"></script>
+<script src="niko-pet.js"></script>
+<script src="board.js"></script>
+</body>
+</html>

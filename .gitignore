@@ -9,6 +9,9 @@ extracted-asar/
 bundle-check/
 *.tmp-launch/
 
+# Agent brief files (local only)
+.claude/
+
 # OS / editor
 Thumbs.db
 Desktop.ini

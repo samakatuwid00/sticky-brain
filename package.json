@@ -1,0 +1,58 @@
+{
+  "name": "sticky-brain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Always-on-top board over the live Claude sessions, the pending inbox, Open Backlogs and the project change evidence.",
+  "author": "deped",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "icons": "powershell -ExecutionPolicy Bypass -File build/make-icon.ps1 && node build/make-ico.js",
+    "dist": "electron-builder --win",
+    "pack": "electron-builder --win --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.deped.stickybrain",
+    "productName": "Sticky Brain",
+    "copyright": "Copyright \u00a9 2026 deped",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Sticky Brain Setup ${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Sticky Brain",
+      "uninstallDisplayName": "Sticky Brain ${version}",
+      "deleteAppDataOnUninstall": false
+    },
+    "asarUnpack": [
+      "src/main/sources/hermes-sessions.py"
+    ]
+  }
+}
