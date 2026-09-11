@@ -22,6 +22,13 @@ const MAX_GROUPS = 24
 const MAX_ITEMS_PER_GROUP = 50
 const MAX_PENDING = 50
 
+const HINTS = {
+  sessions: 'live sessions come from Claude Code (~/.claude/sessions) or Hermes Agent',
+  inbox: 'pending records are Markdown files in this folder — Win+Shift+C writes one',
+  backlogs: 'the backlog is one Markdown file: ## headings with - bullets under them',
+  evidence: 'repo branch chips come from the Second Brain vault watcher (sb-watch.ps1)'
+}
+
 async function build () {
   const [s, i, b, e, v] = await Promise.all([
     sessions.read(), inbox.read(), backlogs.read(), evidence.read(), state.view()
@@ -51,19 +58,21 @@ async function build () {
     items: g.items.slice(0, MAX_ITEMS_PER_GROUP)
   }))
 
-  const sources = [
-    { key: 'sessions', ok: s.ok !== false, path: s.path, error: s.error || null },
-    { key: 'inbox', ok: i.ok !== false, path: i.path, error: i.error || null },
-    { key: 'backlogs', ok: b.ok !== false, path: b.path, error: b.error || null },
-    { key: 'evidence', ok: e.ok !== false, path: e.path, error: e.error || null }
-  ]
+  // `installed: false` is a tool the user simply does not have — not counted, not drawn in red.
+  // `hint` names what would provide the source, for the tile that stands in for it.
+  const source = (key, r) => ({
+    key, ok: r.ok !== false, installed: r.installed !== false, path: r.path, error: r.error || null, hint: HINTS[key]
+  })
+  const sources = [source('sessions', s), source('inbox', i), source('backlogs', b), source('evidence', e)]
+  const detected = sources.filter(x => x.installed)
 
   const knownTotal = live.length + pendingSorted.length + backlogTotal
 
   return {
     at: Date.now(),
     sources,
-    okCount: sources.filter(x => x.ok).length,
+    okCount: detected.filter(x => x.ok).length,
+    detectedCount: detected.length,
     stateCorrupt: v.corrupt,
     live: {
       items: live,

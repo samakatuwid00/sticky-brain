@@ -154,6 +154,10 @@ async function hermesEvidence () {
   return { pids, procs: { desktop, agent }, active, backend }
 }
 
+function noEvidence () {
+  return { pids: new Map(), procs: { desktop: false, agent: false }, active: new Set(), backend: null }
+}
+
 function classify (row, ev, now) {
   // The store's own word about an ended session is final — nothing else needs consulting.
   if (row.endedAt) return { status: 'saved', liveBy: null, pid: null }
@@ -178,13 +182,17 @@ async function read () {
   const [claude, hx] = await Promise.all([readClaude(registry), hermes.read()])
 
   // A broken Claude Code sessions directory still fails the source, exactly as before: that is
-  // the board's primary agent and its absence is a real fault, not an empty list.
-  if (claude.ok === false) {
+  // the board's primary agent and its absence is a real fault, not an empty list. A directory
+  // that does not exist at all is different — Claude Code is not installed — and is reported
+  // as `installed: false` instead.
+  const claudeMissing = claude.ok === false && claude.error === 'ENOENT'
+  if (claude.ok === false && !claudeMissing) {
     return { ...claude, hermes: { ok: hx.ok !== false, error: hx.error || null, count: hx.items.length } }
   }
 
-  // SB: the live filter. Evidence is gathered once per read, not once per row.
-  const ev = await hermesEvidence()
+  // SB: the live filter. Evidence is gathered once per read, not once per row. Without Hermes
+  // there is nothing to grade, so none of its process sweeps are spawned.
+  const ev = hx.installed === false ? noEvidence() : await hermesEvidence()
   const now = Date.now()
   const graded = (hx.items || []).map(x => {
     const verdict = classify(x, ev, now)
@@ -203,7 +211,7 @@ async function read () {
   const hermesLive = graded.filter(x => x.status !== 'saved')
   const hermesSaved = graded.filter(x => x.status === 'saved')
   const hermesItems = [...hermesLive, ...hermesSaved.slice(0, MAX_SAVED)]
-  const items = [...claude.items, ...hermesItems]
+  const items = [...(claudeMissing ? [] : claude.items), ...hermesItems]
 
   // Status first, as before. Then Claude Code ahead of Hermes at equal status — not favouritism:
   // a Claude Code row's liveness is verified against a real pid, a Hermes row's is inferred from
@@ -223,9 +231,12 @@ async function read () {
 
   return {
     ok: true,
+    // Neither agent on this machine: the board says "not detected" rather than "broken".
+    installed: !claudeMissing || hx.installed !== false,
+    claude: { installed: !claudeMissing },
     path: paths.sessions,
     items,
-    unparsed: claude.unparsed,
+    unparsed: claude.unparsed || 0,
     // Hermes being missing or unreadable is reported beside the source rather than as the
     // source's own failure — the LIVE list is still truthful about Claude Code either way.
     hermes: {

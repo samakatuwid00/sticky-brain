@@ -45,7 +45,12 @@ function parseTasklist (stdout) {
   return rows
 }
 
+// tasklist, PowerShell and where.exe are Windows-only. Elsewhere the sweeps answer "nothing found"
+// instead of spawning a binary that is not there.
+const IS_WIN = process.platform === 'win32'
+
 function processes () {
+  if (!IS_WIN) return Promise.resolve([])
   const now = Date.now()
   if (table.rows && (now - table.at) < TABLE_TTL) return Promise.resolve(table.rows)
   if (table.pending) return table.pending
@@ -140,6 +145,7 @@ const PORT_SCRIPT = [
 ].join('\n')
 
 function hermesListeningPorts () {
+  if (!IS_WIN) return Promise.resolve([])
   const now = Date.now()
   if (ports.list.length && (now - ports.at) < PORTS_TTL) return Promise.resolve(ports.list)
   if (ports.pending) return ports.pending
@@ -163,12 +169,13 @@ function hermesListeningPorts () {
 }
 
 // where.exe applies PATHEXT, so this resolves hermes.exe, hermes.cmd or hermes.bat alike.
+// `which` is the same question on macOS and Linux.
 function cliPath () {
   const now = Date.now()
   if (cli.path !== null && (now - cli.at) < 5 * 60 * 1000) return Promise.resolve(cli.path)
   if (cli.pending) return cli.pending
   cli.pending = new Promise(resolve => {
-    execFile('where.exe', ['hermes'], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
+    execFile(IS_WIN ? 'where.exe' : 'which', ['hermes'], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
       const hit = err ? null : (String(stdout).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || null)
       cli = { at: Date.now(), path: hit, pending: null }
       resolve(hit)

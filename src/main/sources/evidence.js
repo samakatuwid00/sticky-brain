@@ -16,6 +16,8 @@ async function read () {
   try {
     text = await fs.readFile(paths.evidence, 'utf8')
   } catch (err) {
+    // Optional: without the vault's watcher there are simply no branch chips.
+    if (err.code === 'ENOENT') return { ok: true, installed: false, path: paths.evidence, byProject: {} }
     return { ok: false, path: paths.evidence, error: err.code || 'unreadable', byProject: {} }
   }
 

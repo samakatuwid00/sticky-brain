@@ -104,6 +104,7 @@ async function openSession (s) {
   // broken helper alike. The main process now names which of those happened, so the board can too.
   if (r && r.ok) toast((SESSION_MODE[r.mode] || SESSION_MODE.folder)(s))
   else if (r && r.mode === 'ended') toast('session ended — ' + s.name + ' is no longer running', true)
+  else if (r && r.mode === 'unsupported') toast(r.error || 'not supported on this OS', true)
   else toast('could not reach ' + s.name + (r && r.error ? ' — ' + r.error : ''), true)
 }
 
@@ -178,6 +179,14 @@ function unavailable (src) {
   reveal.onclick = () => window.board.reveal(src.path)
   acts.append(retry, reveal)
   t.append(acts)
+  return t
+}
+
+// A source this machine simply does not have: one quiet line saying what would provide it, not
+// the red tile a broken source gets.
+function notSetUp (src) {
+  const t = el('div', 'repo', 'not set up — ' + (src.hint || src.key))
+  t.title = src.path || ''
   return t
 }
 
@@ -387,6 +396,8 @@ function render () {
   col.live.append(section('LIVE', snap.live.items.length, snap.live.busy ? snap.live.busy + ' busy' : null))
   if (!src('sessions').ok) {
     col.live.append(unavailable(src('sessions')))
+  } else if (src('sessions').installed === false) {
+    col.live.append(notSetUp(src('sessions')))
   } else {
     // The cap is per open group now: rows arrive sorted busy-then-recent, so it still drops the
     // least interesting ones. A folded group draws nothing and counts nothing toward `shown`.
@@ -440,6 +451,8 @@ function render () {
   for (let i = 1; i < col.backlog.length; i++) col.backlog[i].append(section('BACKLOG ⋯', null))
   if (!src('backlogs').ok) {
     col.backlog[0].append(unavailable(src('backlogs')))
+  } else if (src('backlogs').installed === false) {
+    col.backlog[0].append(notSetUp(src('backlogs')))
   } else {
     const groups = snap.backlog.groups.slice(0, cap.groups)
     let accountedFor = 0
@@ -478,8 +491,11 @@ function render () {
   }
 
   // --- footer ---
-  fSources.textContent = `${snap.okCount}/4 sources ok`
+  // Sources the machine does not have are left out of the count, and named on hover instead.
+  const missing = snap.sources.filter(s => s.installed === false)
+  fSources.textContent = `${snap.okCount}/${snap.detectedCount ?? snap.sources.length} sources ok`
   fSources.className = bad.length ? 'bad' : 'ok'
+  fSources.title = missing.map(s => s.key + ' not set up — ' + (s.hint || s.path)).join('\n')
   fAge.textContent = '· ' + rel(snap.at)
   fOf.textContent = `${shown} of ${snap.counts.known}`
 

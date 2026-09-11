@@ -61,7 +61,8 @@ function stamp () {
 // just as well; if there is none, the spawn fails and runReader reports that rather than reporting
 // an empty session list.
 function pythonPath () {
-  return fs.existsSync(paths.hermesPython) ? paths.hermesPython : 'python.exe'
+  if (fs.existsSync(paths.hermesPython)) return paths.hermesPython
+  return process.platform === 'win32' ? 'python.exe' : 'python3'
 }
 
 // SB: External child processes (Python) cannot read inside app.asar — they need the

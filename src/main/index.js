@@ -6,7 +6,10 @@ const path = require('path')
 // SB: `spawn` left with the terminal launcher — nothing in the main process opens a console any
 // more. The one place that still spawns a detached child is hermes-runtime, starting the Desktop App.
 const { execFile } = require('child_process')
-const { paths, vaultDir } = require('./config')
+const config = require('./config')
+const { paths, isWin } = config
+// First-run sample data for local mode — see local-data.js.
+const localData = require('./local-data')
 const snapshot = require('./snapshot')
 const state = require('./state')
 // SB: Feature 6 · mark done reaches both sources directly — the receipt path re-reads .inbox/ so
@@ -293,7 +296,7 @@ function buildTrayMenu () {
     { label: 'Refresh now', click: pushSnapshot },
     { type: 'separator' },
     {
-      label: 'Start with Windows',
+      label: isWin ? 'Start with Windows' : 'Start at login',
       type: 'checkbox',
       checked: autostartEnabled(),
       click: item => setAutostart(item.checked)
@@ -327,6 +330,9 @@ function createTray () {
 const shotArg = process.argv.find(a => a.startsWith('--shot='))
 
 app.whenReady().then(async () => {
+  // Before the watchers: in local mode the inbox folder they watch is created here.
+  const seed = localData.ensure()
+  console.log('[data] ' + seed.mode + ' mode' + (seed.dir ? ' · ' + seed.dir : '') + (seed.seeded ? ' · seeded sample data' : ''))
   createWindow()
   // A dev run must never touch the Run key — that belongs to the installed copy.
   if (!shotArg) { if (!isDev) initAutostartOnce(); createTray() }
@@ -619,6 +625,9 @@ Activate $best
 // and is not subject to the machine's script execution policy. The pid is checked to be an
 // integer first — it is the only value interpolated into the script.
 function runFocus (script, subject) {
+  // The focus helper is Win32 through PowerShell. Elsewhere it is reported as unsupported rather
+  // than spawned and failed.
+  if (!isWin) return Promise.resolve({ status: 'UNSUPPORTED', detail: process.platform })
   return new Promise(resolve => {
     const encoded = Buffer.from(script, 'utf16le').toString('base64')
     execFile('powershell.exe',
@@ -758,7 +767,8 @@ ipcMain.handle('board:revealSession', async (_e, data) => {
     NOFOCUS: 'Windows refused to move focus to its terminal',
     SCRIPTFAIL: 'the focus helper failed: ' + (r.detail || 'unknown'),
     BADPID: 'the session file carries no usable pid',
-    DEAD: 'session ended — the process is gone'
+    DEAD: 'session ended — the process is gone',
+    UNSUPPORTED: 'focusing a session window is Windows-only for now'
   }[r.status] || ('focus failed (' + r.status + ')')
   return { ok: false, mode: (r.status || 'error').toLowerCase(), error: why }
 })
@@ -778,9 +788,17 @@ function taskPrompt (info) {
 // SB: clicking a task leaves a durable trace in the vault via the sanctioned inbox writer.
 // Opening a chat is not completing a task, so it never edits Open Backlogs.md. Marking done
 // (Feature 6, below) does — that is an owner keypress, not an agent's unasked write.
-const SB_INBOX = path.join(vaultDir, '.automation', 'sb-inbox.ps1')
+//
+// The writer is optional: null in local mode, on a vault without .automation/, and off Windows.
+// Every caller treats null as "no receipt", never as a failure of the action itself.
+function inboxHook () {
+  const hook = paths.inboxHook
+  return isWin && hook && fs.existsSync(hook) ? hook : null
+}
+
 function recordInVault (info) {
-  if (!fs.existsSync(SB_INBOX)) return
+  const SB_INBOX = inboxHook()
+  if (!SB_INBOX) return
   // PowerShell paths need single quotes; escape any embedded single quote.
   const q = s => "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'"
   const ps = [
@@ -819,7 +837,8 @@ const RECORD_BACKLOG_DONE = true
 
 function runInbox (fields) {
   return new Promise(resolve => {
-    if (!fs.existsSync(SB_INBOX)) return resolve({ ok: false, error: 'sb-inbox.ps1 not found' })
+    const SB_INBOX = inboxHook()
+    if (!SB_INBOX) return resolve({ ok: false, error: 'sb-inbox.ps1 not found' })
     const q = s => "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'"
     const ps = ['&', q(SB_INBOX)]
     for (const [flag, value] of fields) ps.push(flag, q(value))
@@ -830,18 +849,32 @@ function runInbox (fields) {
   })
 }
 
+// Moves a pending record into done/ in its own folder. Nothing is deleted.
+function moveToDone (file) {
+  const doneDir = path.join(path.dirname(file), 'done')
+  try {
+    fs.mkdirSync(doneDir, { recursive: true })
+    fs.renameSync(file, path.join(doneDir, path.basename(file)))
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.code || err.message }
+  }
+}
+
 async function markDone (id) {
   if (typeof id === 'string' && id.startsWith('bl:')) {
     const hit = await backlogs.markDone(id)
     if (!hit.ok) {
+      const name = path.basename(paths.backlogs)
       return {
         ok: false,
         error: hit.error === 'not-found'
-          ? 'that line is no longer in Open Backlogs.md — the file changed'
-          : 'could not write Open Backlogs.md (' + hit.error + ')'
+          ? 'that line is no longer in ' + name + ' — the file changed'
+          : 'could not write ' + name + ' (' + hit.error + ')'
       }
     }
-    if (RECORD_BACKLOG_DONE) {
+    // The strike is the durable part; without the vault's writer there is simply no receipt.
+    if (RECORD_BACKLOG_DONE && inboxHook()) {
       await runInbox([
         ['-Task', DONE_PREFIX + '[' + hit.heading + '] ' + hit.text],
         ['-Project', 'sticky-brain'],
@@ -861,6 +894,19 @@ async function markDone (id) {
     const onBoard = !!item && item.folder === 'board'
     if (!item) return { ok: false, error: 'that pending record is no longer in ' + (id.startsWith('binbox:') ? '.board-inbox/' : '.inbox/') }
     const base = path.basename(item.file)
+
+    // No receipt writer (local mode, or a vault without .automation/sb-inbox.ps1): the board
+    // retires the record itself by moving it into done/ beside it. A vault .inbox/ record is the
+    // one exception — there done/ means "consolidated", so it is left for the vault's own tooling.
+    if (!inboxHook()) {
+      if (config.mode() === 'vault' && !onBoard) {
+        return { ok: false, error: 'sb-inbox.ps1 not found — .inbox/ records are retired by the vault\'s consolidate step' }
+      }
+      const moved = moveToDone(item.file)
+      if (!moved.ok) return { ok: false, error: 'could not move ' + base + ' to done/ (' + moved.error + ')' }
+      return { ok: true, kind: 'pending', text: item.task }
+    }
+
     const wrote = await runInbox([
       ['-Task', DONE_PREFIX + item.task],
       ['-Project', item.project || 'sticky-brain'],
@@ -879,13 +925,10 @@ async function markDone (id) {
       // SB: round 3 · receipt first, move second: a record that vanished without a vault trace is
       // the one outcome this path must never produce. If the move fails the receipt still stands,
       // the board hides the row locally, and the file is reported rather than silently left behind.
-      const doneDir = path.join(paths.boardInbox, 'done')
-      try {
-        fs.mkdirSync(doneDir, { recursive: true })
-        fs.renameSync(item.file, path.join(doneDir, base))
-      } catch (err) {
-        console.error('[mark-done] receipt written but could not move ' + base + ' to .board-inbox/done/:', err.message)
-        return { ok: true, kind: 'pending', text: item.task, note: 'receipt written; ' + base + ' is still in .board-inbox/ (' + (err.code || err.message) + ')' }
+      const moved = moveToDone(item.file)
+      if (!moved.ok) {
+        console.error('[mark-done] receipt written but could not move ' + base + ' to .board-inbox/done/:', moved.error)
+        return { ok: true, kind: 'pending', text: item.task, note: 'receipt written; ' + base + ' is still in .board-inbox/ (' + moved.error + ')' }
       }
     }
     return { ok: true, kind: 'pending', text: item.task }

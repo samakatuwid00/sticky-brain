@@ -2,7 +2,8 @@
 
 const fs = require('fs/promises')
 const path = require('path')
-const { paths } = require('../config')
+const config = require('../config')
+const { paths } = config
 
 // One Markdown file per pending capture, written by .automation/sb-inbox.ps1. Fixed frontmatter
 // (type: sb-inbox, createdLocal, status: pending) and fixed `## ` sections. `done/` and
@@ -108,10 +109,21 @@ async function readFolder (folder) {
 }
 
 async function read () {
-  const [vault, board] = await Promise.all(FOLDERS.map(readFolder))
+  // Local mode points both folders at one directory (see config.js); it is read once, not twice.
+  const same = path.resolve(paths.inbox) === path.resolve(paths.boardInbox)
+  const [vault, board] = await Promise.all([
+    readFolder(FOLDERS[0]),
+    same
+      ? { ok: true, path: paths.boardInbox, items: [], unparsed: 0, receipts: 0 }
+      : readFolder(FOLDERS[1])
+  ])
 
   // SB: .inbox/ unreadable is still the source being down — the board has always said so.
   // .board-inbox/ not existing yet is not an error: it appears on the first quick-capture.
+  // A local inbox folder that is simply not there yet is the same case: nothing captured so far.
+  if (!vault.ok && vault.error === 'ENOENT' && config.mode() === 'local') {
+    return { ok: true, path: vault.path, boardPath: board.path, items: [], unparsed: 0, receipts: 0, byFolder: null }
+  }
   if (!vault.ok) return { ...vault, boardPath: board.path, byFolder: { inbox: vault, board } }
 
   const items = vault.items.concat(board.ok ? board.items : [])
