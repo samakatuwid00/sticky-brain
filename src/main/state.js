@@ -2,7 +2,9 @@
 
 const fs = require('fs/promises')
 const path = require('path')
-const { app } = require('electron')
+// userDataDir() rather than electron's app directly: it follows a dev run's moved userData, and it
+// survives plain `node` (build/check-sources.js builds a whole snapshot without Electron).
+const { userDataDir } = require('./config')
 
 // Acknowledge / snooze / pin live here and NOWHERE in the vault. The cost of that choice is
 // recorded: this state is lost on a reinstall and is invisible to any agent that has not been
@@ -14,7 +16,7 @@ const { app } = require('electron')
 // entry kept here is only the local echo, so the board updates in the same frame rather than
 // waiting for the next file watch.
 
-const FILE = () => path.join(app.getPath('userData'), 'board-state.json')
+const FILE = () => path.join(userDataDir(), 'board-state.json')
 const EMPTY = { acked: {}, snoozed: {}, pinned: {}, done: {} }
 
 let cache = null

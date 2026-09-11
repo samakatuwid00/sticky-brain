@@ -1,14 +1,16 @@
 'use strict'
 
+const registry = require('./sources')
 const sessions = require('./sources/sessions')
-const inbox = require('./sources/inbox')
-const backlogs = require('./sources/backlogs')
-const evidence = require('./sources/evidence')
 const state = require('./state')
 
-// One BoardSnapshot merged from the four sources, with board-state applied. A source that fails
-// keeps its own `ok: false` and its path — the renderer draws a tile for it. It must never
-// collapse into "nothing pending", which is the failure this whole design is aimed at.
+// One BoardSnapshot merged from the registered sources (see sources/index.js), with board-state
+// applied. A source that fails keeps its own `ok: false` and its path — the renderer draws a tile
+// for it. It must never collapse into "nothing pending", which is the failure this whole design is
+// aimed at.
+//
+// The agent adapters are merged into ONE source, `sessions` — the LIVE list — with each agent's own
+// health under `live.byAgent`. The data adapters are one source each.
 
 // Transport caps only. How many are actually DRAWN is a density decision and belongs to the
 // renderer — compact promises roughly twice the items at the same width, which a fixed cap here
@@ -22,17 +24,21 @@ const MAX_GROUPS = 24
 const MAX_ITEMS_PER_GROUP = 50
 const MAX_PENDING = 50
 
-const HINTS = {
-  sessions: 'live sessions come from Claude Code (~/.claude/sessions) or Hermes Agent',
-  inbox: 'pending records are Markdown files in this folder — Win+Shift+C writes one',
-  backlogs: 'the backlog is one Markdown file: ## headings with - bullets under them',
-  evidence: 'repo branch chips come from the Second Brain vault watcher (sb-watch.ps1)'
+function sessionsHint () {
+  const names = registry.list('agent').map(a => a.hint || a.label || a.key)
+  return 'live sessions come from ' + (names.join(' or ') || 'an agent adapter')
 }
 
 async function build () {
-  const [s, i, b, e, v] = await Promise.all([
-    sessions.read(), inbox.read(), backlogs.read(), evidence.read(), state.view()
+  const data = registry.list('data')
+  const [s, v, ...dataResults] = await Promise.all([
+    sessions.read(), state.view(), ...data.map(a => registry.read(a))
   ])
+  const byKey = {}
+  data.forEach((a, n) => { byKey[a.key] = dataResults[n] })
+  const i = byKey.inbox || { ok: true, items: [] }
+  const b = byKey.backlogs || { ok: true, groups: [] }
+  const e = byKey.evidence || { ok: true, byProject: {} }
 
   const live = (s.items || []).map(x => ({
     ...x,
@@ -60,10 +66,13 @@ async function build () {
 
   // `installed: false` is a tool the user simply does not have — not counted, not drawn in red.
   // `hint` names what would provide the source, for the tile that stands in for it.
-  const source = (key, r) => ({
-    key, ok: r.ok !== false, installed: r.installed !== false, path: r.path, error: r.error || null, hint: HINTS[key]
+  const source = (key, r, hint) => ({
+    key, ok: r.ok !== false, installed: r.installed !== false, path: r.path, error: r.error || null, hint
   })
-  const sources = [source('sessions', s), source('inbox', i), source('backlogs', b), source('evidence', e)]
+  const sources = [
+    source('sessions', s, sessionsHint()),
+    ...data.map(a => source(a.key, byKey[a.key], a.hint || a.label))
+  ]
   const detected = sources.filter(x => x.installed)
 
   const knownTotal = live.length + pendingSorted.length + backlogTotal
@@ -77,9 +86,10 @@ async function build () {
     live: {
       items: live,
       busy: live.filter(x => x.status === 'busy').length,
-      // SB: Hermes rides inside the sessions source rather than being a fifth one, so its own
-      // health travels here — "hermes is not installed" and "hermes is unreadable" are different
-      // facts, and neither one may be shown as "no sessions".
+      // Per agent adapter: label, badge, installed, ok, error, count — "not installed" and
+      // "unreadable" are different facts, and neither one may be shown as "no sessions".
+      byAgent: s.byAgent || {},
+      // SB: kept for the pre-registry shape; the same object as byAgent.hermes.
       hermes: s.hermes || null
     },
     // SB: receipts are mark-done records filtered out of `items` by inbox.js — carried so the

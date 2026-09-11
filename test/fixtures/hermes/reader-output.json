@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "path": "state.db",
+  "copied": false,
+  "items": [
+    { "id": "20250911_080000_aaaaaa", "source": "cli", "title": "ended chat", "model": "m1", "cwd": "/work/alpha", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757560000000, "endedAt": 1757563600000, "endReason": "user", "lastAt": 1757563600000, "messageCount": 4, "toolCallCount": 0, "pinned": false },
+    { "id": "20250911_090000_bbbbbb", "source": "cli", "title": "has a process", "model": "m1", "cwd": "/work/alpha", "gitBranch": "main", "gitRepoRoot": "/work/alpha", "startedAt": 1757566800000, "endedAt": null, "endReason": null, "lastAt": 1757569800000, "messageCount": 12, "toolCallCount": 3, "pinned": false },
+    { "id": "20250911_091500_cccccc", "source": "cli", "title": null, "model": "m1", "cwd": "", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757567700000, "endedAt": null, "endReason": null, "lastAt": 1757570370000, "messageCount": 2, "toolCallCount": 0, "pinned": false },
+    { "id": "20250911_092000_dddddd", "source": "desktop", "title": "api says active", "model": "m2", "cwd": "/work/beta", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757568000000, "endedAt": null, "endReason": null, "lastAt": 1757570100000, "messageCount": 6, "toolCallCount": 1, "pinned": true },
+    { "id": "20250911_070000_eeeee1", "source": "desktop", "title": "old 1", "model": "m2", "cwd": "", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757560000000, "endedAt": null, "endReason": null, "lastAt": 1757566800000, "messageCount": 1, "toolCallCount": 0, "pinned": false },
+    { "id": "20250911_070000_eeeee2", "source": "desktop", "title": "old 2", "model": "m2", "cwd": "", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757560000000, "endedAt": null, "endReason": null, "lastAt": 1757566700000, "messageCount": 1, "toolCallCount": 0, "pinned": false },
+    { "id": "20250911_070000_eeeee3", "source": "desktop", "title": "old 3", "model": "m2", "cwd": "", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757560000000, "endedAt": null, "endReason": null, "lastAt": 1757566600000, "messageCount": 1, "toolCallCount": 0, "pinned": false },
+    { "id": "20250911_070000_eeeee4", "source": "desktop", "title": "old 4", "model": "m2", "cwd": "", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757560000000, "endedAt": null, "endReason": null, "lastAt": 1757566500000, "messageCount": 1, "toolCallCount": 0, "pinned": false },
+    { "id": "20250911_070000_eeeee5", "source": "desktop", "title": "old 5", "model": "m2", "cwd": "", "gitBranch": null, "gitRepoRoot": null, "startedAt": 1757560000000, "endedAt": null, "endReason": null, "lastAt": 1757566400000, "messageCount": 1, "toolCallCount": 0, "pinned": false }
+  ]
+}

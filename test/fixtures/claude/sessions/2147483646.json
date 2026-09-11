@@ -1,0 +1,11 @@
+{
+  "pid": 2147483646,
+  "sessionId": "fixture-dead-session",
+  "cwd": "/work/alpha/src",
+  "startedAt": 1757566800000,
+  "version": "2.1.220",
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "name": "dead fixture session",
+  "status": "busy"
+}

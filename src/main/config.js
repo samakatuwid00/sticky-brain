@@ -4,8 +4,9 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
+const { isWin } = require('./platform')
+
 const home = os.homedir()
-const isWin = process.platform === 'win32'
 
 const claudeDir = process.env.STICKY_BRAIN_CLAUDE || path.join(home, '.claude')
 
@@ -41,7 +42,12 @@ const hermesDir = process.env.STICKY_BRAIN_HERMES || path.join(localAppData, 'he
 // Plain `node` (build/check-sessions.js) loads this module too, where `require('electron')` is
 // only a path string — so the app is reached for lazily and a missing one is survivable.
 function userDataDir () {
-  try { return require('electron').app.getPath('userData') } catch { return path.join(home, '.sticky-brain') }
+  try { return require('electron').app.getPath('userData') } catch {
+    // STICKY_BRAIN_USER_DATA only applies outside Electron — build/check-sources.js uses it to keep
+    // a test run away from the real ~/.sticky-brain.
+    const env = (process.env.STICKY_BRAIN_USER_DATA || '').trim()
+    return env ? path.resolve(env) : path.join(home, '.sticky-brain')
+  }
 }
 
 let fileCache = { dir: null, value: {} }

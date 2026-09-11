@@ -1,6 +1,7 @@
 'use strict'
 
 const fs = require('fs/promises')
+const { existsSync } = require('fs')
 const path = require('path')
 const config = require('../config')
 const { paths } = config
@@ -144,4 +145,23 @@ async function read () {
   }
 }
 
-module.exports = { read, FOLDERS }
+// Registry adapter fields (see sources/index.js). In local mode the folder is created at start-up,
+// so it counts as installed before anything has been captured into it.
+function detect () {
+  return { installed: config.mode() === 'local' || existsSync(paths.inbox), path: paths.inbox }
+}
+
+function open (row) {
+  return { action: 'file', path: (row && row.file) || paths.inbox }
+}
+
+module.exports = {
+  key: 'inbox',
+  kind: 'data',
+  label: 'Inbox',
+  hint: 'pending records are Markdown files in this folder — Win+Shift+C writes one',
+  detect,
+  read,
+  open,
+  FOLDERS
+}

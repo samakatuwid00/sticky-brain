@@ -207,8 +207,17 @@ const LIVE_BY = {
   recent: 'live — INFERRED: it spoke seconds ago and a hermes process is running'
 }
 
+// SB: Phase 2 · an agent this file has never heard of still gets a badge and a name — from the
+// adapter that produced it, carried in snap.live.byAgent — so a new adapter needs no renderer edit.
+function agentInfo (key) {
+  key = key || 'claude'
+  if (AGENTS[key]) return AGENTS[key]
+  const a = snap && snap.live.byAgent && snap.live.byAgent[key]
+  return { badge: (a && a.badge) || key.slice(0, 2).toUpperCase(), full: (a && a.label) || key }
+}
+
 function sessionRow (s) {
-  const agent = AGENTS[s.agent] || AGENTS.claude
+  const agent = agentInfo(s.agent)
   const hermes = s.agent === 'hermes'
   // SB: 'saved' is Hermes history — real and openable, and explicitly not a claim that anything is
   // running. It is dimmed like a stale row without borrowing stale's "the process died" meaning.
@@ -314,7 +323,7 @@ const ARCHIVE = 'archive'
 const liveOpen = new Map()
 
 function appName (s) {
-  return s.project || (AGENTS[s.agent] ? AGENTS[s.agent].full : null) || 'unfiled'
+  return s.project || agentInfo(s.agent).full || 'unfiled'
 }
 
 // The source already sorts busy-then-recent with saved and stale last, so first appearance is the
@@ -418,13 +427,13 @@ function render () {
       const hidden = g.items.length - rows.length
       if (hidden > 0) col.live.append(el('div', 'repo', '+ ' + hidden + ' more sessions'))
     }
-    // SB: Hermes is read inside the sessions source, so a Hermes-side failure would otherwise be
+    // SB: every agent is read inside the sessions source, so one agent's failure would otherwise be
     // invisible — the list would simply be short, which is the one thing this board must never do.
-    // Hermes merely not being installed says nothing and prints nothing.
-    const hx = snap.live.hermes
-    if (hx && hx.installed && !hx.ok) {
-      const t = el('div', 'repo flag', 'hermes sessions unreadable — ' + (hx.error || 'unknown'))
-      t.title = hx.path || ''
+    // An agent merely not being installed says nothing and prints nothing.
+    for (const a of Object.values(snap.live.byAgent || {})) {
+      if (!a.installed || a.ok) continue
+      const t = el('div', 'repo flag', a.label + ' sessions unreadable — ' + (a.error || 'unknown'))
+      t.title = a.path || ''
       col.live.append(t)
     }
   }

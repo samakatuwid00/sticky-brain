@@ -8,6 +8,11 @@ const path = require('path')
 const { execFile } = require('child_process')
 const config = require('./config')
 const { paths, isWin } = config
+// SB: Phase 2 · every Windows-only spawn (the focus helper, the sb-inbox hook) goes through the
+// platform layer, which answers "not supported on this OS" instead of spawning elsewhere…
+const platform = require('./platform')
+// …and a clicked session is opened by the source adapter that produced it (sources/index.js).
+const sources = require('./sources')
 // First-run sample data for local mode — see local-data.js.
 const localData = require('./local-data')
 const snapshot = require('./snapshot')
@@ -624,42 +629,35 @@ Activate $best
 // -EncodedCommand takes UTF-16LE base64, which sidesteps every layer of cmd/PowerShell quoting
 // and is not subject to the machine's script execution policy. The pid is checked to be an
 // integer first — it is the only value interpolated into the script.
-function runFocus (script, subject) {
-  // The focus helper is Win32 through PowerShell. Elsewhere it is reported as unsupported rather
-  // than spawned and failed.
-  if (!isWin) return Promise.resolve({ status: 'UNSUPPORTED', detail: process.platform })
-  return new Promise(resolve => {
-    const encoded = Buffer.from(script, 'utf16le').toString('base64')
-    execFile('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
-      { windowsHide: true, timeout: 12000 },
-      (err, stdout, stderr) => {
-        const out = String(stdout || '')
-        const line = out.split(/\r?\n/).find(l => l.startsWith('SBFOCUS '))
-        // The old code did `resolve(!err && /OK/.test(stdout))`, so a PowerShell that never ran,
-        // a compile error in the Add-Type block and a genuine "no window" were one indistinct
-        // false — and the folder fallback answered for all three. They are separated now, and
-        // anything unexpected is printed rather than swallowed.
-        if (!line) {
-          console.error('[revealSession] focus script produced no result for', subject,
-            '\n  exec error:', err ? (err.killed ? 'timed out' : err.message) : 'none',
-            '\n  stdout:', out.trim() || '(empty)',
-            '\n  stderr:', String(stderr || '').trim() || '(empty)')
-          return resolve({ status: 'SCRIPTFAIL', detail: err ? String(err.message).split('\n')[0] : 'no output' })
-        }
-        let parsed
-        try { parsed = JSON.parse(line.slice('SBFOCUS '.length)) } catch (e) {
-          console.error('[revealSession] unparsable result:', line)
-          return resolve({ status: 'SCRIPTFAIL', detail: 'unparsable result' })
-        }
-        if (parsed.status !== 'OK') {
-          console.error('[revealSession]', subject, '->', parsed.status, '|', parsed.title || '(untitled)', '|', parsed.detail || '')
-        }
-        const trailing = String(stderr || '').trim()
-        if (trailing) console.error('[revealSession] powershell stderr:', trailing)
-        resolve(parsed)
-      })
-  })
+async function runFocus (script, subject) {
+  // The focus helper is Win32 through PowerShell. Elsewhere the platform layer reports it as
+  // unsupported rather than spawning and failing.
+  if (!platform.supports('windowFocus')) return { status: 'UNSUPPORTED', detail: platform.platform }
+  const { err, stdout, stderr } = await platform.powershell(script, { timeout: 12000 })
+  const out = String(stdout || '')
+  const line = out.split(/\r?\n/).find(l => l.startsWith('SBFOCUS '))
+  // The old code did `resolve(!err && /OK/.test(stdout))`, so a PowerShell that never ran,
+  // a compile error in the Add-Type block and a genuine "no window" were one indistinct
+  // false — and the folder fallback answered for all three. They are separated now, and
+  // anything unexpected is printed rather than swallowed.
+  if (!line) {
+    console.error('[revealSession] focus script produced no result for', subject,
+      '\n  exec error:', err ? (err.killed ? 'timed out' : err.message) : 'none',
+      '\n  stdout:', out.trim() || '(empty)',
+      '\n  stderr:', String(stderr || '').trim() || '(empty)')
+    return { status: 'SCRIPTFAIL', detail: err ? String(err.message).split('\n')[0] : 'no output' }
+  }
+  let parsed
+  try { parsed = JSON.parse(line.slice('SBFOCUS '.length)) } catch (e) {
+    console.error('[revealSession] unparsable result:', line)
+    return { status: 'SCRIPTFAIL', detail: 'unparsable result' }
+  }
+  if (parsed.status !== 'OK') {
+    console.error('[revealSession]', subject, '->', parsed.status, '|', parsed.title || '(untitled)', '|', parsed.detail || '')
+  }
+  const trailing = String(stderr || '').trim()
+  if (trailing) console.error('[revealSession] powershell stderr:', trailing)
+  return parsed
 }
 
 function focusWindowByPid (pid) {
@@ -682,6 +680,11 @@ function focusWindowByName (name) {
 // Hermes session and a task launch both end up — the plan's "focus the Hermes Desktop App window",
 // with the launch as the answer to "there is no window yet" rather than a silent failure.
 async function focusHermesDesktop () {
+  // Focusing and starting the desktop app are both Windows paths today. Elsewhere this answers
+  // "not supported on this OS" instead of spawning anything.
+  if (!platform.supports('windowFocus')) {
+    return { ok: false, mode: 'unsupported', error: platform.unsupported('opening the Hermes Desktop App').error }
+  }
   // hermes.exe is the image for BOTH the desktop app and the CLI; focusWindowByName scores on
   // window ownership, which only the desktop build has.
   const name = hermesRuntime.DESKTOP_IMAGE.replace(/\.exe$/i, '')
@@ -712,51 +715,61 @@ function pidAlive (pid) {
   try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' }
 }
 
+// SB: a session with no live process is history, and history belongs in the app that can open it.
+// The Hermes Desktop App is focused (started if need be) instead of a scratchpad folder — opening a
+// temp directory was never an answer to "show me this conversation".
+async function openInHermesDesktop (sessionId) {
+  const d = await focusHermesDesktop()
+  if (d.ok) return { ok: true, mode: d.mode, sessionId: sessionId || null }
+  return {
+    ok: false,
+    mode: d.mode,
+    error: d.error + (sessionId ? ' — this session is saved as ' + sessionId : '')
+  }
+}
+
 ipcMain.handle('board:revealSession', async (_e, data) => {
   const info = data || {}
-  const pid = Number(info.pid)
 
-  // SB: a Hermes row used to end here with "hermes records no pid" and a folder — which was true
-  // of the SQLite store but not of the machine. Two things changed:
+  // SB: Phase 2 · the row goes back to the adapter that produced it (sources/index.js), and its
+  // open() hint says how it opens — nothing here branches on which agent it is:
   //
-  //  * A genuinely running session may now ARRIVE with a pid. sources/sessions.js reads Hermes's
-  //    own processes.json, which maps a session id to a real process, so the same ancestor-chain
-  //    walk Claude Code uses applies to it unchanged.
-  //  * A session with no live process is history, and history belongs in the app that can open it.
-  //    The Hermes Desktop App is focused (started if need be) instead of the scratchpad folder —
-  //    opening a temp directory was never an answer to "show me this conversation".
-  if (info.agent === 'hermes') {
-    if (pidAlive(pid)) {
-      const r = await focusWindowByPid(pid)
-      if (r.status === 'OK') return { ok: true, mode: 'window' }
-      // Falls through to the desktop app: the session is real and running, so there is still
-      // somewhere right to send the click even when its own window could not be reached.
-    }
+  //   focus-pid       walk up from the pid to the owning window. A Hermes row carries a pid only
+  //                   when processes.json proved it running; its fallback is the desktop app. A
+  //                   Claude Code row's fallback is its folder, for a process that owns no window.
+  //   hermes-desktop  saved Hermes history — open the Hermes Desktop App.
+  const hint = sources.openHint(info)
+  if (!hint) {
+    return { ok: false, mode: 'unsupported', error: 'no source adapter can open a ' + (info.agent || 'unknown') + ' session' }
+  }
+  // Every way of opening a session is a Win32 focus today. Elsewhere: said plainly, nothing spawned.
+  if (!platform.supports('windowFocus')) return platform.unsupported('opening a session window')
 
-    const d = await focusHermesDesktop()
-    if (d.ok) return { ok: true, mode: d.mode, sessionId: info.sessionId || null }
-    return {
-      ok: false,
-      mode: d.mode,
-      error: d.error + (info.sessionId ? ' — this session is saved as ' + info.sessionId : '')
-    }
+  if (hint.action === 'hermes-desktop') return openInHermesDesktop(hint.sessionId)
+  if (hint.action !== 'focus-pid') {
+    return { ok: false, mode: 'unsupported', error: 'cannot open a session by ' + hint.action }
   }
 
-  // A dead session has no terminal to focus, and opening its folder is a non-answer dressed up
-  // as success. It is named for what it is instead.
+  const pid = hint.pid
   if (!pidAlive(pid)) {
+    if (hint.fallback === 'hermes-desktop') return openInHermesDesktop(hint.sessionId)
+    // A dead session has no terminal to focus, and opening its folder is a non-answer dressed up
+    // as success. It is named for what it is instead.
     console.error('[revealSession] pid', pid, 'is not running — session ended')
     return { ok: false, mode: 'ended', error: 'session ended — pid ' + pid + ' is no longer running' }
   }
 
   const r = await focusWindowByPid(pid)
   if (r.status === 'OK') return { ok: true, mode: 'window' }
+  // The session is real and running, so there is still somewhere right to send the click even
+  // when its own window could not be reached.
+  if (hint.fallback === 'hermes-desktop') return openInHermesDesktop(hint.sessionId)
 
   // The folder is the answer to exactly one question: the process is alive and genuinely owns no
   // window (a hook, a headless run). Every other failure gets reported as itself.
   if (r.status === 'NOWINDOW') {
-    if (info.cwd && fs.existsSync(info.cwd)) {
-      await shell.openPath(info.cwd)
+    if (hint.cwd && fs.existsSync(hint.cwd)) {
+      await shell.openPath(hint.cwd)
       return { ok: true, mode: 'folder' }
     }
     return { ok: false, mode: 'nowindow', error: 'running without a window, and its cwd is unreadable' }
@@ -793,7 +806,7 @@ function taskPrompt (info) {
 // Every caller treats null as "no receipt", never as a failure of the action itself.
 function inboxHook () {
   const hook = paths.inboxHook
-  return isWin && hook && fs.existsSync(hook) ? hook : null
+  return platform.supports('powershell') && hook && fs.existsSync(hook) ? hook : null
 }
 
 function recordInVault (info) {
@@ -809,10 +822,7 @@ function recordInVault (info) {
     '-NotesUsed', q('wiki/Sticky Brain — Feature Overhaul Proposal.md')
   ].join(' ')
   // Fire-and-forget; vault write must never block the chat open.
-  execFile('powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', ps],
-    { windowsHide: true, timeout: 15000 },
-    () => {})
+  platform.powershellCommand(ps, { timeout: 15000 })
 }
 
 /* ---- SB: Feature 6 · mark done ---- */
@@ -835,18 +845,15 @@ const DONE_PREFIX = 'Mark done: '
 // dated, greppable trace for /sb consolidate and the log. Set false to stop writing them.
 const RECORD_BACKLOG_DONE = true
 
-function runInbox (fields) {
-  return new Promise(resolve => {
-    const SB_INBOX = inboxHook()
-    if (!SB_INBOX) return resolve({ ok: false, error: 'sb-inbox.ps1 not found' })
-    const q = s => "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'"
-    const ps = ['&', q(SB_INBOX)]
-    for (const [flag, value] of fields) ps.push(flag, q(value))
-    execFile('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', ps.join(' ')],
-      { windowsHide: true, timeout: 15000 },
-      err => resolve(err ? { ok: false, error: String(err.message).split('\n')[0] } : { ok: true }))
-  })
+async function runInbox (fields) {
+  const SB_INBOX = inboxHook()
+  if (!SB_INBOX) return { ok: false, error: 'sb-inbox.ps1 not found' }
+  const q = s => "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'"
+  const ps = ['&', q(SB_INBOX)]
+  for (const [flag, value] of fields) ps.push(flag, q(value))
+  const r = await platform.powershellCommand(ps.join(' '), { timeout: 15000 })
+  if (r.unsupported) return { ok: false, error: r.error }
+  return r.err ? { ok: false, error: String(r.err.message).split('\n')[0] } : { ok: true }
 }
 
 // Moves a pending record into done/ in its own folder. Nothing is deleted.

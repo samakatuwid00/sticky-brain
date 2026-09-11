@@ -1,8 +1,10 @@
 'use strict'
 
 const fs = require('fs')
-const { execFile, spawn } = require('child_process')
 const { paths } = require('./config')
+// Every spawn below goes through the platform layer, which answers "unsupported" off Windows
+// instead of spawning tasklist or PowerShell where there is none.
+const platform = require('./platform')
 
 // SB: everything the board needs to know about Hermes as a set of RUNNING THINGS, as opposed to
 // sources/hermes.js which knows it as a SQLite archive. Three questions live here:
@@ -45,27 +47,20 @@ function parseTasklist (stdout) {
   return rows
 }
 
-// tasklist, PowerShell and where.exe are Windows-only. Elsewhere the sweeps answer "nothing found"
-// instead of spawning a binary that is not there.
-const IS_WIN = process.platform === 'win32'
-
+// Off Windows the sweep answers "nothing found" instead of spawning a binary that is not there.
 function processes () {
-  if (!IS_WIN) return Promise.resolve([])
+  if (!platform.supports('processList')) return Promise.resolve([])
   const now = Date.now()
   if (table.rows && (now - table.at) < TABLE_TTL) return Promise.resolve(table.rows)
   if (table.pending) return table.pending
-  table.pending = new Promise(resolve => {
-    execFile('tasklist.exe', ['/fo', 'csv', '/nh'],
-      { windowsHide: true, timeout: 6000, maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout) => {
-        const previous = table.rows
-        table.pending = null
-        // A failed sweep must not read as "nothing is running" — the previous answer is kept if
-        // there is one, and an empty list is never cached, so the next poll tries again.
-        const rows = err && !stdout ? [] : parseTasklist(stdout)
-        if (rows.length) table = { at: Date.now(), rows, pending: null }
-        resolve(rows.length ? rows : (previous || []))
-      })
+  table.pending = platform.tasklist().then(r => {
+    const previous = table.rows
+    table.pending = null
+    // A failed sweep must not read as "nothing is running" — the previous answer is kept if
+    // there is one, and an empty list is never cached, so the next poll tries again.
+    const rows = r.err && !r.stdout ? [] : parseTasklist(r.stdout)
+    if (rows.length) table = { at: Date.now(), rows, pending: null }
+    return rows.length ? rows : (previous || [])
   })
   return table.pending
 }
@@ -145,41 +140,31 @@ const PORT_SCRIPT = [
 ].join('\n')
 
 function hermesListeningPorts () {
-  if (!IS_WIN) return Promise.resolve([])
+  if (!platform.supports('listeningPorts')) return Promise.resolve([])
   const now = Date.now()
   if (ports.list.length && (now - ports.at) < PORTS_TTL) return Promise.resolve(ports.list)
   if (ports.pending) return ports.pending
-  ports.pending = new Promise(resolve => {
-    const encoded = Buffer.from(PORT_SCRIPT, 'utf16le').toString('base64')
-    execFile('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
-      { windowsHide: true, timeout: 10000 },
-      (err, stdout) => {
-        ports.pending = null
-        const line = String(stdout || '').split(/\r?\n/).find(l => l.startsWith('SBPORTS '))
-        if (!line) return resolve(ports.list)
-        const list = line.slice('SBPORTS '.length).split(',')
-          .map(s => Number(s.trim()))
-          .filter(n => Number.isInteger(n) && n > 0)
-        ports = { at: Date.now(), list, pending: null }
-        resolve(list)
-      })
+  ports.pending = platform.powershell(PORT_SCRIPT, { timeout: 10000 }).then(r => {
+    ports.pending = null
+    const line = String(r.stdout || '').split(/\r?\n/).find(l => l.startsWith('SBPORTS '))
+    if (!line) return ports.list
+    const list = line.slice('SBPORTS '.length).split(',')
+      .map(s => Number(s.trim()))
+      .filter(n => Number.isInteger(n) && n > 0)
+    ports = { at: Date.now(), list, pending: null }
+    return list
   })
   return ports.pending
 }
 
-// where.exe applies PATHEXT, so this resolves hermes.exe, hermes.cmd or hermes.bat alike.
-// `which` is the same question on macOS and Linux.
+// where.exe on Windows, `which` elsewhere — see platform.which.
 function cliPath () {
   const now = Date.now()
   if (cli.path !== null && (now - cli.at) < 5 * 60 * 1000) return Promise.resolve(cli.path)
   if (cli.pending) return cli.pending
-  cli.pending = new Promise(resolve => {
-    execFile(IS_WIN ? 'where.exe' : 'which', ['hermes'], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
-      const hit = err ? null : (String(stdout).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || null)
-      cli = { at: Date.now(), path: hit, pending: null }
-      resolve(hit)
-    })
+  cli.pending = platform.which('hermes').then(hit => {
+    cli = { at: Date.now(), path: hit, pending: null }
+    return hit
   })
   return cli.pending
 }
@@ -198,25 +183,14 @@ function desktopExe () {
 async function launchDesktop () {
   const exe = desktopExe()
   if (exe) {
-    try {
-      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false })
-      child.on('error', err => console.error('[hermes] desktop launch failed:', err.message))
-      child.unref()
-      return { ok: true, how: 'exe', path: exe }
-    } catch (err) {
-      console.error('[hermes] desktop launch threw:', err && err.message)
-    }
+    const r = platform.spawnDetached(exe, [], { windowsHide: false })
+    if (r.ok) return { ok: true, how: 'exe', path: exe }
+    console.error('[hermes] desktop launch threw:', r.error)
   }
   const bin = await cliPath()
   if (!bin) return { ok: false, error: 'the Hermes Desktop App was not found and hermes is not on PATH' }
-  try {
-    const child = spawn(bin, ['desktop'], { detached: true, stdio: 'ignore', windowsHide: true })
-    child.on('error', err => console.error('[hermes] `hermes desktop` failed:', err.message))
-    child.unref()
-    return { ok: true, how: 'cli' }
-  } catch (err) {
-    return { ok: false, error: String(err && err.message ? err.message : err) }
-  }
+  const r = platform.spawnDetached(bin, ['desktop'], { windowsHide: true })
+  return r.ok ? { ok: true, how: 'cli' } : { ok: false, error: r.error }
 }
 
 module.exports = {

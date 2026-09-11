@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "check": "node build/check-sources.js",
     "icons": "powershell -ExecutionPolicy Bypass -File build/make-icon.ps1 && node build/make-ico.js",
     "dist": "electron-builder --win",
     "pack": "electron-builder --win --dir"
