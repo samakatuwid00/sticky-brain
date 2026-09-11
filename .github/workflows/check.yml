@@ -1,0 +1,32 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No npm install: the checks need nothing from node_modules.
+      - name: Syntax (node --check)
+        shell: bash
+        run: |
+          set -e
+          for f in $(git ls-files 'src/*.js' 'build/*.js' 'adapters/*.js'); do
+            node --check "$f"
+          done
+          echo "checked $(git ls-files 'src/*.js' 'build/*.js' 'adapters/*.js' | wc -l) files"
+
+      - name: Source fixtures
+        run: node build/check-sources.js

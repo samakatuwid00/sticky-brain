@@ -41,5 +41,12 @@ contextBridge.exposeInMainWorld('board', {
 
   // SB: round 2 · one-line notices from the main process — quick-capture could not take its
   // shortcut, a capture landed, or the end-of-day summary fell back from a native notification.
-  onToast: fn => ipcRenderer.on('board:toast', (_e, t) => fn(t || {}))
+  onToast: fn => ipcRenderer.on('board:toast', (_e, t) => fn(t || {})),
+
+  // SB: Phase 3 · first-run setup card. setupState() -> { firstRun, dataDir, agents, … }; save
+  // and skip both resolve to { ok, state?, error? }. chooseDataDir opens a native folder picker.
+  setupState: () => ipcRenderer.invoke('board:setupState'),
+  setupSave: patch => ipcRenderer.invoke('board:setupSave', patch),
+  setupSkip: () => ipcRenderer.invoke('board:setupSkip'),
+  setupChooseDataDir: () => ipcRenderer.invoke('board:setupChooseDataDir')
 })

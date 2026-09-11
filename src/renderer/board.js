@@ -388,6 +388,58 @@ function layout () {
   return { live, pending, backlog }
 }
 
+/* ---- SB: Phase 3 · first-run setup card ----
+   Asked for once when the page loads, drawn above LIVE, and gone for good after save or skip. The
+   board renders underneath exactly as it would without it — the card is never a gate. Choices wait
+   in `setupDraft` so the 15s re-render does not undo a ticked box. */
+let setupInfo = null
+const setupDraft = { agents: {} }
+
+function setupCard () {
+  const s = setupInfo
+  const t = el('div', 'tile setup')
+  const head = el('div', 'head')
+  head.append(el('span', 'warn', 'first run'), el('span', 'age', 'saved to config.json — edit it any time'))
+  t.append(head)
+
+  const where = s.mode === 'vault' ? 'vault · ' + s.vault : 'data · ' + (setupDraft.dataDir || s.dataDir)
+  t.append(el('div', 'path', where))
+
+  for (const a of s.agents) {
+    const row = el('label', 'agent')
+    const box = el('input')
+    box.type = 'checkbox'
+    box.checked = a.key in setupDraft.agents ? setupDraft.agents[a.key] : a.enabled
+    box.onchange = () => { setupDraft.agents[a.key] = box.checked }
+    row.append(box, el('span', null, a.label), el('span', 'dim', a.installed ? 'found' : 'not found'))
+    row.title = a.path || ''
+    t.append(row)
+  }
+
+  const acts = el('div', 'acts')
+  if (s.mode !== 'vault') {
+    const move = el('button', null, 'change folder…')
+    move.onclick = async () => {
+      const dir = await window.board.setupChooseDataDir()
+      if (dir) { setupDraft.dataDir = dir; render() }
+    }
+    acts.append(move)
+  }
+  const save = el('button', null, 'save')
+  save.onclick = async () => {
+    const r = await window.board.setupSave(setupDraft)
+    if (!r || !r.ok) { toast((r && r.error) || 'could not save setup', true); return }
+    setupInfo = null
+    toast('saved to ' + r.state.configFile)
+    render()
+  }
+  const skip = el('button', null, 'skip')
+  skip.onclick = async () => { await window.board.setupSkip(); setupInfo = null; render() }
+  acts.append(save, skip)
+  t.append(acts)
+  return t
+}
+
 function render () {
   if (!snap) {
     body.textContent = ''
@@ -396,6 +448,7 @@ function render () {
   }
 
   const col = layout()
+  if (setupInfo) col.live.append(setupCard())
   const bad = snap.sources.filter(s => !s.ok)
   const src = k => snap.sources.find(s => s.key === k)
   const cap = limits()
@@ -848,3 +901,10 @@ window.addEventListener('resize', () => {
 setInterval(() => { if (snap && !nikoOnly) render() }, 15000)
 window.boardRender = render
 render()
+
+// A failed or missing setup answer only means no card.
+if (window.board.setupState) {
+  window.board.setupState()
+    .then(s => { if (s && s.firstRun) { setupInfo = s; if (snap && !nikoOnly) render() } })
+    .catch(() => {})
+}

@@ -326,6 +326,15 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
 }
 .tile .acts { margin-top: 6px; }
 
+/* SB: Phase 3 · first-run setup card — a tile, solid rather than dashed: nothing is broken. */
+.tile.setup { border-style: solid; }
+.setup .agent {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 4px;
+  font-size: var(--t4); color: var(--text); cursor: pointer;
+}
+.setup .agent input { margin: 0; accent-color: var(--accent); }
+.setup .agent .dim { color: var(--text-dim); }
+
 .empty { padding: 18px var(--gutter); text-align: center; }
 .empty .big { font-size: var(--t2); font-weight: 700; color: var(--text-hi); }
 .empty .sub { font-size: var(--t3); color: var(--text-dim); margin-top: 4px; }

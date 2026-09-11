@@ -21,6 +21,8 @@ const ROOT = path.join(__dirname, '..')
 const FIX = path.join(ROOT, 'test', 'fixtures')
 const SRC = path.join(ROOT, 'src', 'main')
 const STRANGER = process.argv.includes('--stranger')
+// --focus=<platform>[:variant] — a child pass that plays macOS or Linux for the focus helpers.
+const FOCUS = (process.argv.find(a => a.startsWith('--focus=')) || '').slice('--focus='.length)
 
 const results = []
 async function check (name, fn) {
@@ -38,7 +40,8 @@ function report () {
   const failed = results.filter(r => r[0] === 'FAIL').length
   const passed = results.filter(r => r[0] === 'PASS').length
   const skipped = results.filter(r => r[0] === 'SKIP').length
-  console.log(`${STRANGER ? '[stranger] ' : ''}${passed} passed, ${failed} failed, ${skipped} skipped`)
+  const tag = STRANGER ? '[stranger] ' : FOCUS ? '[focus ' + FOCUS + '] ' : ''
+  console.log(`${tag}${passed} passed, ${failed} failed, ${skipped} skipped`)
   return failed
 }
 
@@ -61,6 +64,10 @@ async function strangerMain () {
 
   const empty = path.join(TMP, 'nothing-here')
   process.env.STICKY_BRAIN_PLATFORM = 'linux'
+  // No xdotool, no X display, no tmux socket — whatever the machine running the check has.
+  process.env.PATH = path.join(empty, 'bin')
+  delete process.env.DISPLAY
+  process.env.TMUX_TMPDIR = path.join(empty, 'tmp')
   process.env.STICKY_BRAIN_USER_DATA = path.join(empty, 'user-data')
   process.env.STICKY_BRAIN_CLAUDE = path.join(empty, 'claude')
   process.env.STICKY_BRAIN_HERMES = path.join(empty, 'hermes')
@@ -112,9 +119,142 @@ async function strangerMain () {
     }
     assert.match(snap.sources[0].hint, /Claude Code.*Hermes Agent/)
   })
+  await check('platform: focus helpers answer unsupported on Linux without xdotool', async () => {
+    assert.strictEqual((await platform.focusPid(4242)).status, 'UNSUPPORTED')
+    assert.strictEqual((await platform.focusApp('Hermes')).status, 'UNSUPPORTED')
+  })
+  await check('setup: an empty machine is a first run, with every agent not found', () => {
+    const s = require(path.join(SRC, 'setup')).state()
+    assert.strictEqual(s.firstRun, true)
+    assert.strictEqual(s.mode, 'local')
+    assert.deepStrictEqual(s.agents.map(a => [a.key, a.installed, a.enabled]), [['claude', false, true], ['hermes', false, true]])
+  })
+  await check('external: no adapters folder loads nothing; the tmux template is not installed', async () => {
+    const external = require(path.join(SRC, 'sources', 'external'))
+    assert.deepStrictEqual(external.loadDir(path.join(empty, 'user-data', 'adapters')), [])
+    const r = external.loadDir(path.join(ROOT, 'adapters'))
+    assert.deepStrictEqual(r.map(x => [path.basename(x.file), x.ok]), [['example-tmux.js', true]])
+    const snap = await snapshot.build()
+    assert.deepStrictEqual([snap.live.byAgent.tmux.installed, snap.live.byAgent.tmux.ok], [false, true])
+    assert.strictEqual(snap.sources[0].installed, false)
+  })
   await check('nothing was spawned on the stranger machine', () => {
     assert.deepStrictEqual(spawned, [])
   })
+}
+
+/* ------------------------------------------------------ macOS / Linux window focus (child) ---- */
+
+// The focus helpers shell out to ps, osascript and xdotool, none of which exist here. execFile is
+// replaced with a fake that answers like them for one process tree —
+//     1 <- 100 <- 200 <- 300,   and only 200 owns a window
+// — and records every call, so the checks see both the answer and exactly what would have run.
+async function focusMain (target) {
+  const [plat, variant] = target.split(':')
+  const cp = require('child_process')
+  const calls = []
+  let refuse = false
+  const PS = '    1     0\n  100     1\n  200   100\n  300   200\n'
+  cp.execFile = (file, args, _opts, cb) => {
+    // The multi-line AppleScript is left out of the log; its argv is what varies.
+    calls.push([file, ...args.filter(a => !a.includes('\n'))].join(' '))
+    let reply = { stdout: '' }
+    if (file === 'ps') reply = { stdout: PS }
+    else if (file === 'osascript') {
+      if (refuse) reply = { err: new Error('exit 1'), stderr: 'execution error: Not allowed to send Apple events to System Events. (-1743)' }
+      else if (args.some(a => / to activate$/.test(a))) reply = { stdout: 'OK Hermes\n' }
+      else reply = { stdout: args.includes('200') ? 'OK Terminal\n' : 'NOWINDOW\n' }
+    } else if (file === 'xdotool' && args[0] === 'search') {
+      reply = args.includes('200') || args.includes('Hermes') ? { stdout: '4194305\n' } : { err: new Error('exit 1') }
+    }
+    process.nextTick(() => cb(reply.err || null, reply.stdout || '', reply.stderr || ''))
+    return { on () {} }
+  }
+  for (const fn of ['spawn', 'exec', 'execFileSync', 'spawnSync', 'execSync']) {
+    cp[fn] = (...args) => { throw new Error('spawn trapped: ' + args[0]) }
+  }
+
+  const bin = path.join(TMP, 'bin')
+  fs.mkdirSync(bin)
+  if (variant !== 'no-xdotool') fs.writeFileSync(path.join(bin, 'xdotool'), '')
+  process.env.PATH = bin
+  if (variant === 'no-display') delete process.env.DISPLAY
+  else process.env.DISPLAY = ':0'
+  process.env.STICKY_BRAIN_PLATFORM = plat
+  const platform = require(path.join(SRC, 'platform'))
+
+  if (plat === 'darwin') {
+    await check('darwin: windowFocus on, the Windows-only capabilities still off', () => {
+      assert.strictEqual(platform.supports('windowFocus'), true)
+      for (const cap of ['processList', 'listeningPorts', 'powershell']) assert.strictEqual(platform.supports(cap), false, cap)
+    })
+    await check('darwin: focusPid walks the ps chain and asks System Events for it', async () => {
+      assert.deepStrictEqual(await platform.focusPid(300), { status: 'OK', title: 'Terminal' })
+      assert.deepStrictEqual(calls.splice(0), ['ps -A -o pid=,ppid=', 'osascript -e 300 200 100'])
+    })
+    await check('darwin: gone, bad pid, refused permission and bad app name are told apart', async () => {
+      assert.strictEqual((await platform.focusPid(999)).status, 'DEAD')
+      assert.strictEqual((await platform.focusPid(-1)).status, 'BADPID')
+      refuse = true
+      const r = await platform.focusPid(300)
+      refuse = false
+      assert.deepStrictEqual([r.status, /-1743/.test(r.detail)], ['NOFOCUS', true])
+      calls.splice(0)
+      assert.strictEqual((await platform.focusApp('x" to quit\ndo shell script "rm')).status, 'BADNAME')
+      assert.deepStrictEqual(calls, [])
+    })
+    await check('darwin: focusApp activates an app by name', async () => {
+      assert.deepStrictEqual(await platform.focusApp('Hermes'), { status: 'OK', title: 'Hermes' })
+      assert.deepStrictEqual(calls.splice(0), ['osascript -e tell application "Hermes" to activate -e return "OK Hermes"'])
+    })
+    return
+  }
+
+  if (variant) {
+    await check('linux (' + variant + '): windowFocus off, focus answers unsupported, nothing run', async () => {
+      assert.strictEqual(platform.supports('windowFocus'), false)
+      assert.strictEqual((await platform.focusPid(300)).status, 'UNSUPPORTED')
+      assert.strictEqual((await platform.focusApp('Hermes')).status, 'UNSUPPORTED')
+      assert.deepStrictEqual(calls, [])
+    })
+    return
+  }
+
+  await check('linux: windowFocus on with xdotool on PATH and an X display', () => {
+    assert.strictEqual(platform.supports('windowFocus'), true)
+    assert.strictEqual(platform.onPath('xdotool'), path.join(bin, 'xdotool'))
+  })
+  await check('linux: focusPid searches up the chain and activates the first window', async () => {
+    assert.deepStrictEqual(await platform.focusPid(300), { status: 'OK', title: 'window 4194305' })
+    assert.deepStrictEqual(calls.splice(0), [
+      'ps -A -o pid=,ppid=',
+      'xdotool search --onlyvisible --pid 300',
+      'xdotool search --onlyvisible --pid 200',
+      'xdotool windowactivate 4194305'
+    ])
+  })
+  await check('linux: no window in the chain is NOWINDOW; a gone pid is DEAD', async () => {
+    const r = await platform.focusPid(100)
+    assert.deepStrictEqual([r.status, r.detail], ['NOWINDOW', 'no visible window in the ancestor chain: 100'])
+    assert.strictEqual((await platform.focusPid(999)).status, 'DEAD')
+  })
+  await check('linux: focusApp finds a window by name', async () => {
+    calls.splice(0)
+    assert.strictEqual((await platform.focusApp('Hermes')).status, 'OK')
+    assert.deepStrictEqual(calls, ['xdotool search --onlyvisible --name Hermes', 'xdotool windowactivate 4194305'])
+  })
+}
+
+// Re-runs this file as a child with a clean STICKY_BRAIN_* environment, echoes its report, and
+// fails if it did.
+function runChild (args) {
+  const { spawnSync } = require('child_process')
+  const env = { ...process.env }
+  for (const k of Object.keys(env)) if (k.startsWith('STICKY_BRAIN_')) delete env[k]
+  const r = spawnSync(process.execPath, [__filename, ...args], { env, encoding: 'utf8', timeout: 60000, windowsHide: true })
+  const out = (r.stdout || '') + (r.stderr || '')
+  for (const line of out.trim().split(/\r?\n/)) console.log('  | ' + line)
+  assert.strictEqual(r.status, 0, args.join(' ') + ' exited ' + r.status)
 }
 
 /* ------------------------------------------------------------------------ fixture run (main) ---- */
@@ -364,27 +504,173 @@ async function main () {
     assert.strictEqual(registry.openHint(row).action, 'focus-pid')
   })
 
+  /* third-party adapters from a folder */
+  const adapterDir = path.join(TMP, 'adapters')
+  fs.mkdirSync(adapterDir)
+  const put = (name, src) => fs.writeFileSync(path.join(adapterDir, name), src)
+  put('good.js', `module.exports = {
+    key: 'good', kind: 'agent', label: 'Good Agent', hint: 'the good agent',
+    detect: () => ({ installed: true, path: '/good' }),
+    read: async () => ({ ok: true, path: '/good', items: [{ id: 'good:1', name: 'from a folder', status: 'idle', cwd: '/work/alpha/x', startedAt: 1 }] }),
+    open: row => ({ action: 'focus-pid', pid: 0, cwd: row.cwd, fallback: 'folder' })
+  }`)
+  put('syntax.js', 'module.exports = { key: ')
+  put('throws.js', "throw new Error('refused to load')")
+  put('dup.js', "module.exports = { key: 'claude', kind: 'agent', detect () {}, read () {}, open () {} }")
+  put('data.js', "module.exports = { key: 'mydata', kind: 'data', detect () {}, read () {}, open () {} }")
+  put('hang.js', `module.exports = {
+    key: 'hang', kind: 'agent', label: 'Hang Agent',
+    detect: () => ({ installed: true, path: '/hang' }), read: () => new Promise(() => {}), open: () => null
+  }`)
+  put('notes.txt', 'not an adapter')
+  fs.copyFileSync(path.join(ROOT, 'adapters', 'example-tmux.js'), path.join(adapterDir, 'example-tmux.js'))
+  process.env.TMUX_TMPDIR = path.join(TMP, 'no-tmux')
+  const external = require(path.join(SRC, 'sources', 'external'))
+
+  await check('external: a folder loads in name order; failures become broken stand-ins', () => {
+    const r = external.loadDir(adapterDir, { readTimeoutMs: 200 })
+    assert.deepStrictEqual(r.map(x => [path.basename(x.file), x.ok]), [
+      ['data.js', false], ['dup.js', false], ['example-tmux.js', true], ['good.js', true],
+      ['hang.js', true], ['syntax.js', false], ['throws.js', false]
+    ])
+    assert.match(r[0].error, /only kind: 'agent'/)
+    assert.match(r[1].error, /already registered/)
+    for (const key of ['ext:data', 'ext:dup', 'ext:syntax', 'ext:throws']) assert.strictEqual(registry.get(key).broken, true, key)
+    assert.strictEqual(registry.get('mydata'), null)
+    assert.strictEqual(registry.get('good').external, true)
+    // The built-in the duplicate tried to replace is untouched.
+    assert.strictEqual(registry.get('claude').external, undefined)
+  })
+  await check('external: good rows reach LIVE; broken and hung adapters are reported beside them', async () => {
+    const snap = await snapshot.build()
+    const row = snap.live.items.find(x => x.id === 'good:1')
+    assert.deepStrictEqual([row.agent, row.project], ['good', 'alpha'])
+    const by = snap.live.byAgent
+    assert.match(by['ext:syntax'].error, /^failed to load — /)
+    assert.match(by['ext:throws'].error, /refused to load/)
+    assert.match(by.hang.error, /no answer in 200ms/)
+    assert.deepStrictEqual([by.good.ok, by.tmux.installed, by.tmux.ok], [true, false, true])
+    assert.strictEqual(snap.sources[0].ok, true)
+    assert.strictEqual(registry.openHint(row).action, 'focus-pid')
+  })
+  await check('example-tmux: the template parses list-sessions output', () => {
+    const tmux = require(path.join(ROOT, 'adapters', 'example-tmux.js'))
+    const rows = tmux.parse('main\t1757570000\t1\t1757570390\t/work/alpha/app\t4242\nold\t1757500000\t0\t1757560000\t/work/beta\t77\n', NOW)
+    assert.deepStrictEqual(rows.map(r => [r.id, r.status, r.pid, r.attached]), [['tmux:main', 'busy', 4242, true], ['tmux:old', 'idle', 77, false]])
+    assert.strictEqual(rows[0].startedAt, 1757570000000)
+    assert.deepStrictEqual(tmux.open(rows[0]), { action: 'focus-pid', pid: 4242, cwd: '/work/alpha/app', fallback: 'folder' })
+  })
+
+  /* niko */
+  await check('niko: one agent broken beside a working board is concern, not alarm', async () => {
+    const mood = require(path.join(ROOT, 'src', 'renderer', 'niko-mood.js'))
+    const snap = await snapshot.build()
+    const calm = { ...snap, live: { ...snap.live, busy: 0 } }
+    assert.deepStrictEqual(mood.brokenAgents(calm).map(a => a.key).sort(),
+      ['ext:data', 'ext:dup', 'ext:syntax', 'ext:throws', 'fixture-broken', 'hang'])
+    assert.strictEqual(mood.moodOf(calm), 'concerned')
+    // A busy session still outranks it, as it does the stale nudge.
+    assert.strictEqual(mood.moodOf(snap), 'busy')
+    // The whole source down is the alarm, unchanged — and not also counted as concern.
+    const down = { ...calm, sources: calm.sources.map(s => s.key === 'sessions' ? { ...s, ok: false } : s) }
+    assert.strictEqual(mood.moodOf(down), 'error')
+    assert.deepStrictEqual(mood.brokenAgents(down), [])
+    // Every agent healthy: no concern, the pre-Phase-3 reading.
+    const healthy = { ...calm, live: { ...calm.live, byAgent: { claude: calm.live.byAgent.claude } } }
+    assert.deepStrictEqual(mood.brokenAgents(healthy), [])
+    assert.ok(['worried', 'waiting'].includes(mood.moodOf(healthy)), mood.moodOf(healthy))
+  })
+
+  /* first-run setup */
+  const config = require(path.join(SRC, 'config'))
+  const setup = require(path.join(SRC, 'setup'))
+  async function withUserData (name, fn) {
+    const was = process.env.STICKY_BRAIN_USER_DATA
+    process.env.STICKY_BRAIN_USER_DATA = path.join(TMP, name)
+    config.reload()
+    try { return await fn(path.join(TMP, name)) } finally {
+      process.env.STICKY_BRAIN_USER_DATA = was
+      config.reload()
+    }
+  }
+  await check('setup: first run offers the agents; save merges config.json and turns one off', () => withUserData('setup-a', async ud => {
+    const cfg = path.join(ud, 'config.json')
+    const s = setup.state()
+    assert.strictEqual(s.firstRun, true)
+    assert.strictEqual(s.configFile, cfg)
+    assert.deepStrictEqual(s.agents.find(a => a.key === 'claude'), { key: 'claude', label: 'Claude Code', installed: true, path: path.join(claudeDir, 'sessions'), enabled: true })
+    assert.ok(!s.agents.some(a => a.key.startsWith('ext:')), 'broken stand-ins are not offered')
+
+    const r = setup.save({ agents: { hermes: false, claude: true, 'no-such-agent': false }, dataDir: path.join(ud, 'elsewhere') })
+    assert.strictEqual(r.ok, true, r.error)
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(cfg, 'utf8')), { dataDir: path.join(ud, 'elsewhere'), agents: { hermes: false } })
+    assert.strictEqual(r.state.firstRun, false)
+    assert.strictEqual(config.agentEnabled('hermes'), false)
+    const live = await sessions.read()
+    assert.deepStrictEqual([live.byAgent.hermes.installed, live.byAgent.hermes.disabled, live.byAgent.claude.disabled], [false, true, false])
+
+    // Keys setup does not own survive; turning the agent back on removes the entry.
+    fs.writeFileSync(cfg, JSON.stringify({ note: 'kept', agents: { hermes: false } }))
+    assert.strictEqual(setup.save({ agents: { hermes: true } }).ok, true)
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(cfg, 'utf8')), { note: 'kept' })
+
+    // An unreadable config.json is the owner's to fix, never overwritten.
+    fs.writeFileSync(cfg, '{ broken')
+    const bad = setup.save({ agents: { hermes: false } })
+    assert.deepStrictEqual([bad.ok, /unreadable/.test(bad.error)], [false, true])
+    assert.strictEqual(fs.readFileSync(cfg, 'utf8'), '{ broken')
+  }))
+  await check('setup: skip writes only the marker; an existing install is never asked', async () => {
+    await withUserData('setup-b', ud => {
+      assert.strictEqual(setup.isFirstRun(), true)
+      assert.strictEqual(setup.dismiss().state.firstRun, false)
+      assert.strictEqual(fs.existsSync(path.join(ud, 'config.json')), false)
+    })
+    await withUserData('setup-c', ud => {
+      fs.mkdirSync(ud, { recursive: true })
+      fs.writeFileSync(path.join(ud, 'board-state.json'), '{}')
+      assert.strictEqual(setup.isFirstRun(), false)
+    })
+  })
+
+  /* --shot load race */
+  await check('load gate: a page that finished loading before the wait still releases it', async () => {
+    const { EventEmitter } = require('events')
+    const { loadGate } = require(path.join(SRC, 'load-gate'))
+    const wc = new EventEmitter()
+    const gate = loadGate(wc)
+    assert.strictEqual(gate.loaded, false)
+    wc.emit('did-finish-load') // the page wins the race against the first snapshot
+    const outcome = await Promise.race([gate.wait().then(() => 'released'), new Promise(r => setTimeout(() => r('hung'), 500))])
+    assert.strictEqual(outcome, 'released')
+    assert.strictEqual(gate.loaded, true)
+    // The pattern it replaces: a listener added after the event never hears it.
+    let heard = false
+    wc.once('did-finish-load', () => { heard = true })
+    await new Promise(r => setTimeout(r, 20))
+    assert.strictEqual(heard, false)
+  })
+
   /* platform (this OS) */
-  await check('platform: capabilities match this OS (' + platform.platform + ')', () => {
-    assert.strictEqual(platform.supports('windowFocus'), process.platform === 'win32')
+  await check('platform: capabilities match this OS (' + platform.platform + ')', async () => {
+    const focus = process.platform === 'win32' || process.platform === 'darwin' ||
+      (process.platform === 'linux' && !!process.env.DISPLAY && !!platform.onPath('xdotool'))
+    assert.strictEqual(platform.supports('windowFocus'), focus)
     assert.strictEqual(platform.supports('no-such-capability'), false)
     const u = platform.unsupported('doing a thing')
     assert.deepStrictEqual([u.ok, u.mode, u.status], [false, 'unsupported', 'UNSUPPORTED'])
+    // Windows focus stays the PowerShell helper in index.js; the platform helpers refuse it.
+    if (platform.isWin) assert.strictEqual((await platform.focusPid(process.pid)).status, 'UNSUPPORTED')
   })
 
-  /* stranger machine */
-  await check('stranger machine: nothing installed, non-Windows, nothing spawned', () => {
-    const { spawnSync } = require('child_process')
-    const env = { ...process.env }
-    for (const k of Object.keys(env)) if (k.startsWith('STICKY_BRAIN_')) delete env[k]
-    const r = spawnSync(process.execPath, [__filename, '--stranger'], { env, encoding: 'utf8', timeout: 60000, windowsHide: true })
-    const out = (r.stdout || '') + (r.stderr || '')
-    for (const line of out.trim().split(/\r?\n/)) console.log('  | ' + line)
-    assert.strictEqual(r.status, 0, 'stranger pass exited ' + r.status)
-  })
+  /* child passes */
+  await check('stranger machine: nothing installed, non-Windows, nothing spawned', () => runChild(['--stranger']))
+  for (const target of ['darwin', 'linux', 'linux:no-xdotool', 'linux:no-display']) {
+    await check('focus helpers as ' + target, () => runChild(['--focus=' + target]))
+  }
 }
 
-;(STRANGER ? strangerMain() : main())
+;(STRANGER ? strangerMain() : FOCUS ? focusMain(FOCUS) : main())
   .catch(err => results.push(['FAIL', 'harness', err && err.stack ? err.stack : String(err)]))
   .then(() => {
     const failed = report()

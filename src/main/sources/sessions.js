@@ -2,6 +2,7 @@
 
 const registry = require('./index')
 const projects = require('./projects')
+const config = require('../config')
 
 // The LIVE list is every agent session on the machine: the rows of every `kind: 'agent'` adapter
 // in the registry, merged and sorted. Nothing here names an agent — a new one plugs in by
@@ -15,6 +16,8 @@ const projects = require('./projects')
 const STATUS_RANK = { busy: 0, idle: 1, saved: 2, stale: 3 }
 
 async function readAgent (adapter) {
+  // Switched off in first-run setup (config.json `agents`): not detected, not read, not counted.
+  if (!config.agentEnabled(adapter.key)) return { ok: true, installed: false, disabled: true, path: null, error: null, items: [] }
   const d = registry.detect(adapter)
   if (!d.installed) return { ok: true, installed: false, path: d.path, error: d.error || null, items: [] }
   return registry.read(adapter)
@@ -45,6 +48,7 @@ async function read () {
       hint: adapter.hint || null,
       installed,
       ok,
+      disabled: r.disabled === true,
       path: r.path || null,
       error: r.error || null,
       count: rows.length,

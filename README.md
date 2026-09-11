@@ -1,5 +1,7 @@
 # Sticky Brain
 
+[![check](https://github.com/samakatuwid00/sticky-brain/actions/workflows/check.yml/badge.svg?branch=opensource)](https://github.com/samakatuwid00/sticky-brain/actions/workflows/check.yml)
+
 An always-on-top board over your live coding-agent sessions, a pending inbox and a backlog.
 
 ```
@@ -45,6 +47,8 @@ over `config.json`, which wins over the default. Relative paths in `config.json`
 | `STICKY_BRAIN_EVIDENCE`    | `evidence`        | evidence Markdown file                     |
 | `STICKY_BRAIN_PROJECTS`    | `projects`        | `projects.json` (session folder → project) |
 | `STICKY_BRAIN_INBOX_HOOK`  | `inboxHook`       | receipt-writer script (Windows only)       |
+| `STICKY_BRAIN_ADAPTERS`    | `adapters`        | agent adapters folder (`<userData>/adapters`) |
+| —                          | `agents`          | `{ "hermes": false }` turns an agent off   |
 | `STICKY_BRAIN_CLAUDE`      | —                 | Claude Code home (default `~/.claude`)     |
 | `STICKY_BRAIN_HERMES`      | —                 | Hermes Agent home                          |
 
@@ -58,8 +62,35 @@ With `vault` set, the paths follow a Second Brain vault layout instead: `.inbox/
 receipt through it; without it, quick captures are still retired into `done/`, and vault `.inbox/`
 records are left for the vault's own consolidate step.
 
+### First run
+
+On a machine with no `config.json`, a card at the top of the board shows where the data folder is
+and which agents were found, each with a toggle. *save* writes the choices into `config.json`;
+*skip* writes nothing. The board renders underneath either way, and the card never returns.
+
+### Agent adapters
+
+Every `*.js` file in the adapters folder (tray menu → *Open adapters folder*) is loaded at start-up
+as an extra agent for the LIVE list. [`adapters/example-tmux.js`](adapters/example-tmux.js) is a
+commented template; the full contract is at the top of
+[`src/main/sources/index.js`](src/main/sources/index.js).
+
+A file that fails to load, an adapter that throws, and a `read()` that takes longer than four
+seconds each show as one "unreadable" line under LIVE; the rest of the board carries on. Adapters
+run in the main process with full Node access, so only install ones you have read.
+
 ### Platform notes
 
-Built and tested on Windows. Focusing a session's terminal window, the Hermes process sweeps and
-the receipt writer use PowerShell and are skipped elsewhere; the board itself, the local data
-folder and quick capture are plain Node and Electron.
+Built and tested on Windows. Clicking a session focuses its terminal on Windows (Win32 through
+PowerShell), on macOS (System Events through `osascript`; macOS asks for the Automation permission
+on first use) and on Linux under X11 with `xdotool` installed. Wayland has no cross-app focus, so
+there a click says so. The Hermes process sweeps and the receipt writer are Windows-only; the
+board itself, the local data folder and quick capture are plain Node and Electron.
+
+### Checks
+
+```
+npm run check    # node build/check-sources.js — fixtures, no dependencies needed
+```
+
+CI runs it, plus `node --check` over every source file, on Ubuntu and Windows.

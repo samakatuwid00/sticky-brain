@@ -35,6 +35,9 @@ const hermesDir = process.env.STICKY_BRAIN_HERMES || path.join(localAppData, 'he
      STICKY_BRAIN_EVIDENCE      evidence      Project Change Evidence Markdown file
      STICKY_BRAIN_PROJECTS      projects      projects.json (session cwd -> project name)
      STICKY_BRAIN_INBOX_HOOK    inboxHook     sb-inbox.ps1 receipt writer
+     STICKY_BRAIN_ADAPTERS      adapters      third-party agent adapters (default <userData>/adapters)
+
+   config.json alone also carries `agents: { <key>: false }`, written by first-run setup.
 
    Everything resolves lazily: index.js moves userData for a dev run AFTER this module is loaded,
    and the paths have to follow it. */
@@ -50,11 +53,13 @@ function userDataDir () {
   }
 }
 
+const configFile = () => path.join(userDataDir(), 'config.json')
+
 let fileCache = { dir: null, value: {} }
 function fileConfig () {
   const dir = userDataDir()
   if (fileCache.dir === dir) return fileCache.value
-  const file = path.join(dir, 'config.json')
+  const file = configFile()
   let value = {}
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -65,6 +70,15 @@ function fileConfig () {
   }
   fileCache = { dir, value }
   return value
+}
+
+// After setup.js rewrites config.json.
+function reload () { fileCache = { dir: null, value: {} } }
+
+// config.json `{ "agents": { "hermes": false } }` turns an agent adapter off. Absent means on.
+function agentEnabled (key) {
+  const agents = fileConfig().agents
+  return !(agents && typeof agents === 'object' && agents[key] === false)
 }
 
 function setting (envName, key) {
@@ -115,6 +129,11 @@ const paths = {
   get inboxHook () {
     return pick('STICKY_BRAIN_INBOX_HOOK', 'inboxHook', v => path.join(v, '.automation', 'sb-inbox.ps1'), () => null)
   },
+  // Third-party agent adapters, one *.js per adapter — see sources/external.js. Not vault-relative:
+  // code the board runs belongs to this install, not to a notes folder.
+  get adapters () {
+    return setting('STICKY_BRAIN_ADAPTERS', 'adapters') || path.join(userDataDir(), 'adapters')
+  },
   // Hermes keeps sessions in SQLite, not in a folder of JSON files — see sources/hermes.js.
   hermesState: path.join(hermesDir, 'state.db'),
   hermesPython: isWin
@@ -131,4 +150,6 @@ const paths = {
     'win-unpacked', 'Hermes.exe')
 }
 
-module.exports = { home, isWin, claudeDir, hermesDir, paths, vault, dataDir, mode, userDataDir }
+module.exports = {
+  home, isWin, claudeDir, hermesDir, paths, vault, dataDir, mode, userDataDir, configFile, reload, agentEnabled
+}

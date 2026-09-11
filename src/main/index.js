@@ -1,6 +1,6 @@
 'use strict'
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage, screen } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage, screen, dialog } = require('electron')
 const fs = require('fs')
 const path = require('path')
 // SB: `spawn` left with the terminal launcher — nothing in the main process opens a console any
@@ -15,6 +15,11 @@ const platform = require('./platform')
 const sources = require('./sources')
 // First-run sample data for local mode — see local-data.js.
 const localData = require('./local-data')
+// SB: Phase 3 · third-party agent adapters from <userData>/adapters/, the first-run setup card, and
+// the load gate that keeps --shot from waiting on an event that already happened.
+const externalAdapters = require('./sources/external')
+const setup = require('./setup')
+const { loadGate } = require('./load-gate')
 const snapshot = require('./snapshot')
 const state = require('./state')
 // SB: Feature 6 · mark done reaches both sources directly — the receipt path re-reads .inbox/ so
@@ -41,6 +46,8 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 let win = null
+// Resolves once the board page has finished its first load — see load-gate.js.
+let firstLoad = null
 let tray = null
 let watchers = []
 let debounce = null
@@ -121,6 +128,8 @@ function createWindow () {
   })
 
   win.setAlwaysOnTop(true, 'floating')
+  // Before loadFile, so the first load cannot finish ahead of the listener.
+  firstLoad = loadGate(win.webContents)
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
   // Started at login, it comes up in the tray only — the board is a thing you glance at,
   // not a thing that greets you.
@@ -269,6 +278,19 @@ function watch () {
   pollTimer = setInterval(pushSnapshot, 5000)
 }
 
+// SB: Phase 3 · setup can move the data folder, and the watchers are on the old one.
+function rewatch () {
+  clearInterval(pollTimer)
+  for (const w of watchers) { try { w.close() } catch {} }
+  watchers = []
+  watch()
+}
+
+function openAdaptersFolder () {
+  try { fs.mkdirSync(paths.adapters, { recursive: true }) } catch {}
+  shell.openPath(paths.adapters)
+}
+
 function autostartEnabled () {
   return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin
 }
@@ -307,6 +329,7 @@ function buildTrayMenu () {
       click: item => setAutostart(item.checked)
     },
     { label: 'Open board state folder', click: () => shell.openPath(app.getPath('userData')) },
+    { label: 'Open adapters folder', click: openAdaptersFolder },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() }
   ]))
@@ -338,6 +361,11 @@ app.whenReady().then(async () => {
   // Before the watchers: in local mode the inbox folder they watch is created here.
   const seed = localData.ensure()
   console.log('[data] ' + seed.mode + ' mode' + (seed.dir ? ' · ' + seed.dir : '') + (seed.seeded ? ' · seeded sample data' : ''))
+  // SB: Phase 3 · before the first snapshot reads the registry. A file that fails is registered as
+  // a broken stand-in and drawn as such — never a reason not to start.
+  for (const r of externalAdapters.loadDir(paths.adapters)) {
+    console.log('[adapters] ' + path.basename(r.file) + (r.ok ? ' · ' + r.keys.join(', ') : ' · failed: ' + r.error))
+  }
   createWindow()
   // A dev run must never touch the Run key — that belongs to the installed copy.
   if (!shotArg) { if (!isDev) initAutostartOnce(); createTray() }
@@ -352,24 +380,28 @@ app.whenReady().then(async () => {
       const hit = process.argv.find(a => a.startsWith('--' + name + '='))
       return hit ? hit.slice(name.length + 3) : null
     }
-    win.webContents.once('did-finish-load', () => {
-      setTimeout(async () => {
-        const theme = arg('theme')
-        const density = arg('density')
-        if (theme || density) {
-          await win.webContents.executeJavaScript(
-            `document.documentElement.dataset.theme=${JSON.stringify(theme || 'dark')};` +
-            `document.documentElement.dataset.density=${JSON.stringify(density || 'default')};` +
-            'window.boardRender && window.boardRender();' +
-            'window.nikoPet && window.nikoPet.retheme();')
-          // capturePage can hand back the frame from before the attribute flip.
-          await new Promise(r => setTimeout(r, 400))
-        }
-        const img = await win.webContents.capturePage()
-        fs.writeFileSync(out, img.toPNG())
-        app.quit()
-      }, 2500)
-    })
+    // SB: Phase 3 · this used to be `once('did-finish-load')`, registered only after the first
+    // snapshot above had been built — so whenever the page loaded first, the event had already
+    // fired and the shot waited forever. The gate was set before loadFile and resolves either way.
+    // The watchdog turns any other stall into an exit code instead of a hung script.
+    setTimeout(() => { console.error('[shot] no frame after 60s — giving up'); app.exit(2) }, 60000)
+    await firstLoad.wait()
+    await new Promise(r => setTimeout(r, 2500))
+    const theme = arg('theme')
+    const density = arg('density')
+    if (theme || density) {
+      await win.webContents.executeJavaScript(
+        `document.documentElement.dataset.theme=${JSON.stringify(theme || 'dark')};` +
+        `document.documentElement.dataset.density=${JSON.stringify(density || 'default')};` +
+        'window.boardRender && window.boardRender();' +
+        'window.nikoPet && window.nikoPet.retheme();')
+      // capturePage can hand back the frame from before the attribute flip.
+      await new Promise(r => setTimeout(r, 400))
+    }
+    const img = await win.webContents.capturePage()
+    fs.writeFileSync(out, img.toPNG())
+    console.log('[shot] wrote ' + out)
+    app.quit()
   }
 })
 
@@ -421,6 +453,28 @@ ipcMain.handle('board:nikoMenu', () => {
 })
 
 ipcMain.handle('board:hideToTray', () => hideToTray())
+
+/* ---- SB: Phase 3 · first-run setup card (setup.js) ---- */
+ipcMain.handle('board:setupState', () => setup.state())
+ipcMain.handle('board:setupSkip', () => setup.dismiss())
+ipcMain.handle('board:setupSave', async (_e, patch) => {
+  const before = config.dataDir()
+  const r = setup.save(patch)
+  if (!r.ok) return r
+  // A moved data folder is seeded like a first run and watched in place of the old one.
+  if (config.dataDir() !== before) { localData.ensure(); rewatch() }
+  await pushSnapshot()
+  return r
+})
+ipcMain.handle('board:setupChooseDataDir', async () => {
+  if (!win || win.isDestroyed()) return null
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Sticky Brain data folder',
+    defaultPath: config.dataDir(),
+    properties: ['openDirectory', 'createDirectory']
+  })
+  return r.canceled || !r.filePaths.length ? null : r.filePaths[0]
+})
 
 /* ---- SB: Feature 2 · dragging the pet around the desktop ----
 
@@ -664,6 +718,9 @@ function focusWindowByPid (pid) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return Promise.resolve({ status: 'BADPID', detail: 'pid ' + pid })
   }
+  // SB: Phase 3 · macOS (osascript) and Linux (xdotool) focus is best-effort in the platform
+  // layer, and answers with the same status words. Windows never takes this branch.
+  if (!platform.isWin) return platform.focusPid(pid)
   return runFocus(focusScript(pid), 'pid ' + pid)
 }
 
@@ -684,6 +741,13 @@ async function focusHermesDesktop () {
   // "not supported on this OS" instead of spawning anything.
   if (!platform.supports('windowFocus')) {
     return { ok: false, mode: 'unsupported', error: platform.unsupported('opening the Hermes Desktop App').error }
+  }
+  // SB: Phase 3 · off Windows there is no process sweep to consult and no packaged exe to start —
+  // bringing an already-running app forward by name is all there is.
+  if (!platform.isWin) {
+    const r = await platform.focusApp('Hermes')
+    if (r.status === 'OK') return { ok: true, mode: 'desktop' }
+    return { ok: false, mode: 'nodesktop', error: 'could not bring the Hermes Desktop App forward (' + (r.detail || r.status) + ')' }
   }
   // hermes.exe is the image for BOTH the desktop app and the CLI; focusWindowByName scores on
   // window ownership, which only the desktop build has.
@@ -781,7 +845,7 @@ ipcMain.handle('board:revealSession', async (_e, data) => {
     SCRIPTFAIL: 'the focus helper failed: ' + (r.detail || 'unknown'),
     BADPID: 'the session file carries no usable pid',
     DEAD: 'session ended — the process is gone',
-    UNSUPPORTED: 'focusing a session window is Windows-only for now'
+    UNSUPPORTED: 'focusing a session window is not available on this system (Linux needs X11 and xdotool)'
   }[r.status] || ('focus failed (' + r.status + ')')
   return { ok: false, mode: (r.status || 'error').toLowerCase(), error: why }
 })
