@@ -107,23 +107,22 @@ async function openSession (s) {
   else toast('could not reach ' + s.name + (r && r.error ? ' — ' + r.error : ''), true)
 }
 
-// SB: no terminal opens any more, so "hermes chat opened" would be describing a window that is not
-// there. What the toast says instead is what actually happened: the task was submitted and the
-// Desktop App is where the answer arrives — or it was NOT submitted, which is never dressed up as
-// success even though something did open.
-async function openTask (info) {
-  const r = await window.board.openTaskChat(info)
-  if (!r || !r.ok) {
-    return toast('could not open task' + (r && r.error ? ' — ' + r.error : ''), true)
+// SB: a task no longer leaves the board by itself — it goes to the clipboard and the owner pastes it
+// wherever the work is going to happen. The text is the same one the hermes chat used to be seeded
+// with: title, then follow-ups / unresolved, then the file it came from. (`openTaskChat` is still
+// on the bridge; nothing here calls it.)
+function taskText (info) {
+  return [info.title, info.content, info.sourceFile ? 'Source: ' + info.sourceFile : null]
+    .filter(Boolean).join('\n\n')
+}
+
+async function copyTask (info) {
+  try {
+    await navigator.clipboard.writeText(taskText(info))
+    toast('copied to clipboard')
+  } catch (err) {
+    toast('could not copy — ' + ((err && err.message) || 'clipboard unavailable'), true)
   }
-  if (r.submitted) {
-    toast('task sent to hermes' + (r.focused ? ' — see the Desktop App' : '') , false)
-    if (!r.focused && r.note) console.warn('[openTask]', r.note)
-    return
-  }
-  toast(r.mode === 'editor'
-    ? 'hermes unavailable — opened the source file'
-    : (r.note || 'hermes could not take the task'), true)
 }
 
 // SB: `done` is the only action that can fail — it writes to the vault. A row that vanished
@@ -259,29 +258,90 @@ function slip (p) {
     card.append(line)
   }
 
-  card.append(actions(p.id))
-  return clickable(card, () => openTask(pendingTask(p)))
+  const copy = () => copyTask(pendingTask(p))
+  card.append(actions(p.id, copy))
+  return clickable(card, copy)
 }
 
 // SB: `done` leads, because it is the one that ends the item.
-function actions (id) {
+function actions (id, copy) {
   const acts = el('div', 'acts')
   for (const [key, label] of [['done', 'x done'], ['ack', 'a ack'], ['snooze', 's snooze'], ['pin', 'p pin']]) {
     const b = el('button', null, label)
     b.onclick = e => { e.stopPropagation(); act(key, id) }
     acts.append(b)
   }
+  acts.append(copyButton('c copy', copy))
   return acts
+}
+
+function copyButton (label, copy) {
+  const b = el('button', 'cp', label)
+  b.title = 'Copy the task, its notes and its source path'
+  b.onclick = e => { e.stopPropagation(); copy() }
+  return b
 }
 
 function backlogItem (it, heading) {
   const row = el('div', 'item' + (it.pinned ? ' pinned' : ''))
   row.tabIndex = 0
   row.dataset.id = it.id
-  row.title = it.text + '\nclick to open a hermes chat about it · x marks it done'
+  row.title = it.text + '\nclick or c to copy it · x marks it done'
   row.append(el('span', 'mark'))
   row.append(el('span', 'txt', it.text))
-  return clickable(row, () => openTask(backlogTask(it, heading)))
+  const copy = () => copyTask(backlogTask(it, heading))
+  row.append(copyButton('copy', copy))
+  return clickable(row, copy)
+}
+
+/* ---- SB: LIVE is an apps list — Task Manager's Processes sidebar, not one row per session ----
+   Sessions fold under the app they belong to (the project, else the agent's own name). Saved and
+   stale rows are not running, so they share one Archive group at the bottom. Open/closed lives in
+   memory only: apps start open, the Archive starts folded. */
+const ARCHIVE = 'archive'
+const liveOpen = new Map()
+
+function appName (s) {
+  return s.project || (AGENTS[s.agent] ? AGENTS[s.agent].full : null) || 'unfiled'
+}
+
+// The source already sorts busy-then-recent with saved and stale last, so first appearance is the
+// right group order and each group's rows keep that order too.
+function liveGroups (items) {
+  const apps = new Map()
+  const archive = { key: ARCHIVE, name: 'Archive', archive: true, items: [] }
+  for (const s of items) {
+    if (s.status === 'saved' || s.status === 'stale') { archive.items.push(s); continue }
+    const key = 'app:' + appName(s)
+    if (!apps.has(key)) apps.set(key, { key, name: appName(s), archive: false, items: [] })
+    apps.get(key).items.push(s)
+  }
+  const out = [...apps.values()]
+  if (archive.items.length) out.push(archive)
+  return out
+}
+
+function appHead (g, open) {
+  const busy = g.items.filter(s => s.status === 'busy').length
+  const head = el('div', 'app' + (g.archive ? ' archive' : ''))
+  head.tabIndex = 0
+  head.dataset.group = g.key
+  head.setAttribute('role', 'button')
+  head.setAttribute('aria-expanded', String(open))
+  head.title = (g.archive ? 'saved and stale sessions — nothing here is running' : g.name) +
+    '\nclick or ↵ to ' + (open ? 'fold' : 'unfold')
+  head.append(el('span', 'caret', open ? '▾' : '▸'))
+  head.append(el('span', 'h', g.name))
+  head.append(el('span', 'n', g.items.length + (busy ? ' · ' + busy + ' busy' : '')))
+  return clickable(head, () => toggleGroup(g.key, open))
+}
+
+// A re-render replaces every node, so the header that was toggled gets its focus back by key.
+function toggleGroup (key, open) {
+  liveOpen.set(key, !open)
+  render()
+  const again = body.querySelector('[data-group="' + CSS.escape(key) + '"]')
+  if (again) { again.focus(); focusIndex = focusables().indexOf(again) }
 }
 
 // SB: `…` no longer throws the owner at a 4000-line Markdown file. It opens the overview.
@@ -325,19 +385,25 @@ function render () {
   if (!src('sessions').ok) {
     col.live.append(unavailable(src('sessions')))
   } else {
-    // Sorted busy-then-recent by the source, so a cap drops the least interesting rows.
-    const liveShown = snap.live.items.slice(0, cap.live)
-    shown += liveShown.length
-    for (const s of liveShown) {
-      col.live.append(sessionRow(s))
-      if (s.repo) {
-        const chip = el('div', 'repo' + (s.repo.flagged ? ' flag' : ''),
-          `[${s.repo.branch}${s.repo.dirty ? ' *' + s.repo.dirty : ''}]`)
-        col.live.append(chip)
+    // The cap is per open group now: rows arrive sorted busy-then-recent, so it still drops the
+    // least interesting ones. A folded group draws nothing and counts nothing toward `shown`.
+    for (const g of liveGroups(snap.live.items)) {
+      const open = liveOpen.has(g.key) ? liveOpen.get(g.key) : !g.archive
+      col.live.append(appHead(g, open))
+      if (!open) continue
+      const rows = g.items.slice(0, cap.live)
+      shown += rows.length
+      for (const s of rows) {
+        col.live.append(sessionRow(s))
+        if (s.repo) {
+          const chip = el('div', 'repo' + (s.repo.flagged ? ' flag' : ''),
+            `[${s.repo.branch}${s.repo.dirty ? ' *' + s.repo.dirty : ''}]`)
+          col.live.append(chip)
+        }
       }
+      const hidden = g.items.length - rows.length
+      if (hidden > 0) col.live.append(el('div', 'repo', '+ ' + hidden + ' more sessions'))
     }
-    const liveHidden = snap.live.items.length - liveShown.length
-    if (liveHidden > 0) col.live.append(el('div', 'repo', '+ ' + liveHidden + ' more sessions'))
     // SB: Hermes is read inside the sessions source, so a Hermes-side failure would otherwise be
     // invisible — the list would simply be short, which is the one thing this board must never do.
     // Hermes merely not being installed says nothing and prints nothing.
@@ -502,9 +568,9 @@ function previewFor (row) {
   modalPreview.append(el('div', 'p-path', info.sourceFile || ''))
 
   const acts = el('div', 'p-acts')
-  const chat = el('button', null, '↵ open in hermes')
-  chat.onclick = () => openTask(info)
-  acts.append(chat)
+  const copy = el('button', null, '↵ copy')
+  copy.onclick = () => copyTask(info)
+  acts.append(copy)
   // SB: `done` applies to both kinds now; ack/snooze/pin stay pending-only.
   const doneBtn = el('button', null, 'x done')
   doneBtn.onclick = () => act('done', row.id)
@@ -559,9 +625,9 @@ function fillModal () {
     if (r.age) node.append(el('span', 'm-age', r.age))
     node.onmouseenter = () => select(i)
     node.onclick = () => {
-      // First click previews, a second on the same row opens it — nothing here reaches outside
-      // the app by accident.
-      if (modalSel === i) openTask(r.kind === 'pending' ? pendingTask(r.item) : backlogTask(r.item, r.heading))
+      // First click previews, a second on the same row copies it — nothing lands on the clipboard
+      // by accident.
+      if (modalSel === i) copyTask(r.kind === 'pending' ? pendingTask(r.item) : backlogTask(r.item, r.heading))
       else select(i)
     }
     modalList.append(node)
@@ -612,7 +678,7 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       e.preventDefault()
       const r = modalRows[modalSel]
-      if (r) openTask(r.kind === 'pending' ? pendingTask(r.item) : backlogTask(r.item, r.heading))
+      if (r) copyTask(r.kind === 'pending' ? pendingTask(r.item) : backlogTask(r.item, r.heading))
       return
     }
     // SB: the overview is where a run of items actually gets cleared, so `x` works here too.
@@ -658,7 +724,9 @@ document.addEventListener('keydown', e => {
 
   const id = active && active.dataset ? active.dataset.id : null
   if (!id) return
-  // SB: `x` is free; `d` is toggleDensity and stays that way.
+  // SB: `x` is free; `d` is toggleDensity and stays that way. Only task cards carry an id, and a
+  // task card's opener is its copy, so `c` is the same as ↵ on one.
+  if (e.key === 'c' && active._sbOpen) active._sbOpen()
   if (e.key === 'x') act('done', id)
   if (e.key === 'a') act('ack', id)
   if (e.key === 's') act('snooze', id)

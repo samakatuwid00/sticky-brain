@@ -209,6 +209,19 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
 .ag.hermes { border-color: var(--small-accent); color: var(--small-accent); }
 .row.stale .ag, .row.saved .ag { border-color: var(--hairline); color: var(--text-dim); }
 
+/* SB: LIVE app group header — one per app, folds its rows. The caret sits in the status-marker
+   column so the rows below read as belonging to it. */
+.app { display: flex; align-items: baseline; gap: 6px; padding: 4px var(--gutter) 2px; cursor: pointer; }
+.app:hover { background: var(--hover); }
+.app:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: -2px; }
+.app .caret { width: 9px; flex: none; font-size: var(--t4); color: var(--text-dim); }
+.app .h {
+  font-size: var(--t3); font-weight: 600; color: var(--text-hi);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.app .n { font-size: var(--t4); color: var(--text-dim); flex: none; }
+.app.archive .h { color: var(--text-dim); }
+
 .repo { padding: 0 var(--gutter) 3px var(--indent); font-size: var(--t4); color: var(--text-dim); }
 .repo.flag { color: var(--small-accent); }
 
@@ -266,6 +279,18 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
   border-bottom: 7px solid var(--accent-hi);
 }
 .item.pinned .txt { color: var(--text-hi); font-weight: 600; }
+/* SB: the backlog line's copy button only shows on hover or focus — a button on every one-line
+   item would eat the widget's width. It is still there (and clickable) when invisible. */
+.item .cp {
+  margin-left: auto; flex: none; align-self: flex-start;
+  font-family: inherit; font-size: var(--t5);
+  padding: 0 4px; border: 1px solid var(--hairline); border-radius: 3px;
+  color: var(--text); background: var(--ground); cursor: pointer;
+  opacity: 0;
+}
+.item:hover .cp, .item:focus-within .cp { opacity: 1; }
+.item .cp:hover { background: var(--raised); color: var(--text-hi); }
+.item .cp:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 1px; }
 
 .more { padding: 0 var(--gutter) 3px 26px; }
 .more.top { padding: 2px var(--gutter) 4px; }
@@ -325,7 +350,7 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
 :root[data-density="compact"] .item { padding: 0 var(--gutter) 1px; }
 
 /* ---- SB: clickable affordances ----
-   A live row jumps to its terminal, a slip and a backlog line open a chat about themselves. The
+   A live row jumps to its terminal, a slip and a backlog line copy themselves. The
    pointer is the only signal added — the rows already had hover and focus states. */
 .row, .slip, .item { cursor: pointer; }
 .acts button, .more button { cursor: pointer; }
