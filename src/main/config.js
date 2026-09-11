@@ -88,6 +88,15 @@ function setting (envName, key) {
   return typeof v === 'string' && v.trim() ? path.resolve(userDataDir(), v.trim()) : null
 }
 
+// Hermes skills preloaded into a task launched from the board. Empty by default; set
+// STICKY_BRAIN_HERMES_SKILLS=a,b or config.json `hermesSkills: ["a", "b"]` (or "a,b").
+function hermesSkills () {
+  const env = process.env.STICKY_BRAIN_HERMES_SKILLS
+  const v = env && env.trim() ? env : fileConfig().hermesSkills
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : []
+  return list.map(s => String(s).trim()).filter(Boolean)
+}
+
 const vault = () => setting('STICKY_BRAIN_VAULT', 'vault')
 const dataDir = () => setting('STICKY_BRAIN_DATA', 'dataDir') || path.join(userDataDir(), 'data')
 const mode = () => (vault() ? 'vault' : 'local')
@@ -151,5 +160,6 @@ const paths = {
 }
 
 module.exports = {
-  home, isWin, claudeDir, hermesDir, paths, vault, dataDir, mode, userDataDir, configFile, reload, agentEnabled
+  home, isWin, claudeDir, hermesDir, paths, vault, dataDir, mode, userDataDir, configFile, reload, agentEnabled,
+  hermesSkills
 }

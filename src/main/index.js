@@ -87,7 +87,7 @@ const isDev = process.argv.includes('--dev')
 // the lock is requested and before app ready.
 if (isDev) {
   app.setPath('userData', app.getPath('userData') + ' (dev)')
-  app.setAppUserModelId('com.deped.stickybrain.dev')
+  app.setAppUserModelId('com.example.stickybrain.dev')
 }
 
 // Autostart plus a Start Menu click would otherwise run two boards over the same files.
@@ -882,8 +882,7 @@ function recordInVault (info) {
     '&', q(SB_INBOX),
     '-Task', q(info.title || 'untitled'),
     '-Project', q('sticky-brain'),
-    '-FollowUps', q(info.content || 'opened from Sticky Brain'),
-    '-NotesUsed', q('wiki/Sticky Brain — Feature Overhaul Proposal.md')
+    '-FollowUps', q(info.content || 'opened from Sticky Brain')
   ].join(' ')
   // Fire-and-forget; vault write must never block the chat open.
   platform.powershellCommand(ps, { timeout: 15000 })
@@ -950,8 +949,7 @@ async function markDone (id) {
         ['-Task', DONE_PREFIX + '[' + hit.heading + '] ' + hit.text],
         ['-Project', 'sticky-brain'],
         ['-Files', 'wiki/Open Backlogs.md'],
-        ['-Decisions', 'struck in place from the board (line ' + hit.line + ')'],
-        ['-NotesUsed', 'wiki/Sticky Brain — Mark Done Action Plan.md']
+        ['-Decisions', 'struck in place from the board (line ' + hit.line + ')']
       ])
     }
     return { ok: true, kind: 'backlog', text: hit.text }
@@ -988,8 +986,7 @@ async function markDone (id) {
       ['-Decisions', 'marked done from the Sticky Brain board'],
       ['-FollowUps', onBoard
         ? 'original moved to .board-inbox/done/ by the board itself — no consolidate step needed'
-        : 'move the original record to .inbox/done/ at the next /sb consolidate'],
-      ['-NotesUsed', 'wiki/Sticky Brain — Mark Done Action Plan.md']
+        : 'move the original record to .inbox/done/ at the next /sb consolidate']
     ])
     if (!wrote.ok) return { ok: false, error: 'could not write the vault receipt — ' + wrote.error }
     if (onBoard) {
@@ -1009,10 +1006,9 @@ async function markDone (id) {
   return { ok: false, error: 'nothing to mark done on this item' }
 }
 
-// Verified against `hermes chat --help` on this machine: `-s/--skills` takes a comma-separated
-// list and preloads them for the whole session. `obsidian-vault-memory` is the local skill over
-// this vault; `obsidian` is the builtin note-taking one. Both are installed and enabled.
-const HERMES_SKILL_LIST = ['obsidian-vault-memory', 'obsidian']
+// `hermes chat -s/--skills` takes a comma-separated list and preloads them for the whole session.
+// None by default; set STICKY_BRAIN_HERMES_SKILLS or config.json `hermesSkills` (read at start-up).
+const HERMES_SKILL_LIST = config.hermesSkills()
 const HERMES_SKILLS = HERMES_SKILL_LIST.join(',')
 
 // SB: the task launch, rebuilt around the plan's headline requirement — NO terminal window ever
@@ -1023,7 +1019,7 @@ const HERMES_SKILLS = HERMES_SKILL_LIST.join(',')
 // Three ways to submit, tried in order, none of which shows a window:
 //
 //  1. THE LOCAL BACKEND, as the plan specifies: POST /api/sessions carrying the prompt and the
-//     two vault skills. Checked against the running install first — Hermes Agent 0.19.1 declares
+//     configured skills. Checked against the running install first — Hermes Agent 0.19.1 declares
 //     GET only for that route, and every /api/ route is behind a session token the desktop shell
 //     keeps in its backend's environment (see hermes-api.js). So on THIS machine the call declines
 //     and step 2 answers. It stays because it is what the plan asks for, because a build that
@@ -1050,7 +1046,9 @@ function submitHeadless (bin, prompt, cwd) {
   return new Promise(resolve => {
     let settled = false
     const done = v => { if (!settled) { settled = true; resolve(v) } }
-    const child = execFile(bin, ['chat', '-q', prompt, '--skills', HERMES_SKILLS],
+    const args = ['chat', '-q', prompt]
+    if (HERMES_SKILLS) args.push('--skills', HERMES_SKILLS)
+    const child = execFile(bin, args,
       { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout) => {
         if (err) {

@@ -51,6 +51,7 @@ over `config.json`, which wins over the default. Relative paths in `config.json`
 | —                          | `agents`          | `{ "hermes": false }` turns an agent off   |
 | `STICKY_BRAIN_CLAUDE`      | —                 | Claude Code home (default `~/.claude`)     |
 | `STICKY_BRAIN_HERMES`      | —                 | Hermes Agent home                          |
+| `STICKY_BRAIN_HERMES_SKILLS` | `hermesSkills`  | Hermes skills preloaded into a board task (comma list or array; default none) |
 
 ```json
 { "backlogs": "C:/Users/me/notes/todo.md" }
@@ -94,3 +95,32 @@ npm run check    # node build/check-sources.js — fixtures, no dependencies nee
 ```
 
 CI runs it, plus `node --check` over every source file, on Ubuntu and Windows.
+
+### Packaging under your own name
+
+`package.json` ships with placeholders: `build.appId` is `com.example.stickybrain`, and `author`
+and `build.copyright` say "Sticky Brain contributors". Set your own before running `npm run dist`,
+and change the matching dev id in `app.setAppUserModelId(...)` in `src/main/index.js`.
+
+## Security
+
+Adapters in the adapters folder run in the main process with full Node access: they can read and
+write any file and spawn any process your user can. Only load adapters you trust and have read.
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
+
+## Before publishing
+
+Owner-only steps still to do by hand:
+
+- [ ] Commit the pending `board:openTaskChat` hunk in `src/main/index.js` (it replaces the
+      undefined `vaultDir` fallback, which throws when a task has no source file).
+- [ ] After merging to `master`, switch the README badge from `?branch=opensource` to
+      `?branch=master`.
+- [ ] Real-click focus test on macOS and on Linux (X11 + `xdotool`); so far only Windows has been
+      clicked by hand.
+- [ ] Wayland is unsupported for focusing a session's terminal — keep the notice under
+      *Platform notes* and repeat it in the release notes.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
