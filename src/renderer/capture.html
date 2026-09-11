@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
+<title>Sticky Brain — quick capture</title>
+<link rel="stylesheet" href="capture.css">
+</head>
+<body>
+<!-- SB: round 2 · Feature 1 · the Win+Shift+C box. One line; ↵ writes it to .inbox/, esc drops it. -->
+<form id="cap" autocomplete="off">
+  <span class="dot"></span>
+  <input id="text" type="text" maxlength="2000" spellcheck="false"
+         placeholder="capture to inbox…   #project optional · ↵ save · esc cancel">
+  <span id="state"></span>
+</form>
+<script src="capture.js"></script>
+</body>
+</html>

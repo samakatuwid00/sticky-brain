@@ -37,5 +37,9 @@ contextBridge.exposeInMainWorld('board', {
   // the answer — a round trip per frame would make him lag behind the cursor.
   nikoDragStart: () => ipcRenderer.send('board:nikoDragStart'),
   nikoDragMove: (dx, dy) => ipcRenderer.send('board:nikoDragMove', { dx, dy }),
-  nikoDragEnd: () => ipcRenderer.send('board:nikoDragEnd')
+  nikoDragEnd: () => ipcRenderer.send('board:nikoDragEnd'),
+
+  // SB: round 2 · one-line notices from the main process — quick-capture could not take its
+  // shortcut, a capture landed, or the end-of-day summary fell back from a native notification.
+  onToast: fn => ipcRenderer.on('board:toast', (_e, t) => fn(t || {}))
 })

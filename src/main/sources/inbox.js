@@ -19,6 +19,10 @@ const SECTIONS = {
 }
 
 function parse (text) {
+  // SB: sb-inbox.ps1 writes with Windows PowerShell 5.1's `-Encoding utf8`, which prepends a BOM.
+  // Left in, `^---` never matched and every record's createdLocal came back null — no age on any
+  // slip, and nothing for the stale nudge to measure.
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
   const out = { createdLocal: null }
   const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (fm) {

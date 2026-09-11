@@ -17,6 +17,9 @@ const backlogs = require('./sources/backlogs')
 // sources/hermes.js reads. Both the session click and the task launch go through these.
 const hermesRuntime = require('./hermes-runtime')
 const hermesApi = require('./hermes-api')
+// SB: round 2 · Win+Shift+C quick-capture and the 18:00 summary are self-contained modules.
+const quickCapture = require('./quick-capture')
+const dailySummary = require('./daily-summary')
 
 // SB: a child process's exit handler may still write to console after the app's stdout/stderr
 // pipe has closed (parent console gone, stream redirected then closed), and that write throws
@@ -326,6 +329,8 @@ app.whenReady().then(async () => {
   if (!shotArg) { if (!isDev) initAutostartOnce(); createTray() }
   watch()
   await pushSnapshot()
+  // SB: round 2 hooks — skipped for --shot runs, which render one frame and quit.
+  if (!shotArg) { quickCapture.init({ board: () => win, refresh: schedule }); dailySummary.start({ board: () => win, open: () => exitNikoOnly() }) }
 
   if (shotArg) {
     const out = shotArg.slice('--shot='.length)

@@ -76,12 +76,12 @@ const srcPath = key => {
 /* ---- SB: toast — the only feedback for work that finishes in another window ---- */
 const toastEl = document.getElementById('toast')
 let toastTimer = null
-function toast (msg, bad) {
+function toast (msg, bad, ms) {
   if (!toastEl) return
   toastEl.textContent = msg
   toastEl.className = bad ? 'bad' : ''
   clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { toastEl.className = 'hidden' }, 2600)
+  toastTimer = setTimeout(() => { toastEl.className = 'hidden' }, ms || 2600)
 }
 
 /* ---- SB: the two outbound actions ---- */
@@ -243,7 +243,10 @@ function slip (p) {
   meta.append(age)
   card.append(meta)
 
-  card.append(el('div', 'task', p.task))
+  // SB: round 2 · the task is clamped to two lines in CSS; the whole of it rides on the tooltip.
+  const task = el('div', 'task', p.task)
+  task.title = p.task
+  card.append(task)
 
   if (p.followUps) {
     const line = el('div', 'line')
@@ -790,6 +793,14 @@ window.board.onSnapshot(s => {
   snap = s
   if (nikoOnly) { window.nikoPet && window.nikoPet.observe(s); return }
   render()
+})
+// SB: round 2 · notices from the main process (quick-capture, the end-of-day fallback). Held
+// longer than an action's toast — nothing on the board prompted them. In niko-only mode the toast
+// is hidden with the board, so he says it instead.
+window.board.onToast(t => {
+  if (!t.msg) return
+  if (nikoOnly && window.nikoPet) window.nikoPet.say(t.msg, 6000)
+  else toast(t.msg, t.bad, 6000)
 })
 window.board.onFatal(msg => {
   body.textContent = ''

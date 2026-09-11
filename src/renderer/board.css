@@ -247,11 +247,14 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
   font-size: var(--t2); line-height: 1.35; font-weight: 600; color: var(--text-hi);
   margin: 3px 0 4px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  /* SB: round 2 · a path or URL is one unbreakable word — without this it runs off the slip
+     instead of wrapping into the two clamped lines. */
+  overflow-wrap: anywhere;
 }
 .slip .line { display: flex; gap: 6px; font-size: var(--t3); line-height: 1.4; color: var(--text); margin-bottom: 3px; }
 .slip .line .g { color: var(--text-dim); flex: none; }
 .slip .line .g.q { color: var(--small-accent); font-weight: 700; }
-.slip .line span:last-child { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.slip .line span:last-child { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; overflow-wrap: anywhere; }
 .slip.pinned { border-color: var(--accent); }
 
 .acts { display: flex; gap: 5px; margin-top: 7px; }
@@ -272,7 +275,13 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
 .item:hover { background: var(--hover); }
 .item:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: -2px; }
 .item .mark { width: 7px; height: 2px; border-radius: 1px; background: var(--text-dim); margin-top: 6px; flex: none; }
-.item .txt { font-size: var(--t3); line-height: 1.38; color: var(--text); }
+/* SB: round 2 · two lines, then an ellipsis. The full line is on the row's tooltip, in the
+   overview preview and on the clipboard — the widget is a glance, not the file. */
+.item .txt {
+  font-size: var(--t3); line-height: 1.38; color: var(--text);
+  min-width: 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .item.pinned .mark {
   width: 0; height: 0; background: none; margin-top: 4px;
   border-left: 4px solid transparent; border-right: 4px solid transparent;
@@ -450,13 +459,14 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
 #modal-preview .p-title {
   font-size: var(--t2); font-weight: 600; line-height: 1.35; color: var(--text-hi);
   margin-bottom: 6px;
-  /* the promised 3-line excerpt */
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  /* SB: round 2 · no clamp. The board now clamps slips and backlog lines to two, so the preview
+     is where the full text is read — it scrolls rather than cutting off. Selectable, too. */
+  overflow-wrap: anywhere; user-select: text;
 }
 #modal-preview .p-line { display: flex; gap: 6px; font-size: var(--t3); line-height: 1.45; color: var(--text); margin-bottom: 4px; }
 #modal-preview .p-line .g { color: var(--text-dim); flex: none; }
 #modal-preview .p-line .g.q { color: var(--small-accent); font-weight: 700; }
-#modal-preview .p-line span:last-child { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+#modal-preview .p-line span:last-child { min-width: 0; overflow-wrap: anywhere; user-select: text; }
 #modal-preview .p-path { font-size: var(--t5); color: var(--text-dim); margin-top: 6px; word-break: break-all; line-height: 1.35; }
 #modal-preview .p-acts { display: flex; gap: 5px; margin-top: 8px; }
 #modal-preview .p-acts button {
@@ -522,7 +532,6 @@ body.fullscreen .col { min-width: 0; }
 /* wide enough for a fourth: the backlog gets a second column of headings (see board.js) */
 @media (min-width: 1500px) { body.fullscreen .cols { grid-template-columns: 1fr 1.1fr 1.3fr 1.3fr; } }
 
-body.fullscreen .slip .task { -webkit-line-clamp: 3; }
 body.fullscreen .item { padding: 2px var(--gutter) 3px; }
 body.fullscreen .item .txt { line-height: 1.45; }
 body.fullscreen .empty { padding: 40px var(--gutter); }

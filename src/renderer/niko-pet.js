@@ -84,7 +84,29 @@
     idle: { enter: ['stretch'], ambient: ['idle', 'blink', 'stretch', 'idle', 'look', 'turn', 'idle'], word: 'quiet' },
     excited: { enter: ['celebrate', 'happy'], ambient: ['happy', 'hop', 'dance', 'celebrate', 'blink'], word: 'task done' },
     curious: { enter: ['look'], ambient: ['look', 'turn', 'blink', 'idle'], word: 'hm?' },
-    shy: { enter: ['sad'], ambient: ['sad', 'blink', 'idle'], word: 'eep' }
+    shy: { enter: ['sad'], ambient: ['sad', 'blink', 'idle'], word: 'eep' },
+    // SB: round 2 · Feature 2 · the stale nudge. Its word is not fixed — it names the count, so
+    // it is read through wordOf() rather than from here.
+    worried: { enter: ['look', 'sad'], ambient: ['look', 'think', 'sad', 'blink', 'turn', 'look'], word: 'tasks going stale' }
+  }
+
+  /* SB: round 2 · Feature 2 · a pending item this old has been waiting long enough to be forgotten,
+     which is the exact failure the board exists to prevent. Read from snap.pending.items, which
+     already excludes acked and snoozed records — so snoozing a stale one is how you quiet him.
+     The list is capped at 50 in transit (snapshot.js); past that the count is a floor. */
+  const STALE_PENDING_MS = 3 * 24 * 60 * 60 * 1000
+
+  function stalePending (snap) {
+    if (!snap || !snap.pending || !snap.pending.items) return 0
+    const cutoff = Date.now() - STALE_PENDING_MS
+    return snap.pending.items.filter(p => p.createdAt && p.createdAt < cutoff).length
+  }
+
+  const staleLine = n => n + (n === 1 ? ' task' : ' tasks') + ' waiting 3+ days'
+
+  function wordOf (name) {
+    if (name === 'worried') return staleLine(stalePending(lastSnap))
+    return (MOODS[name] || MOODS.idle).word
   }
 
   /* SB: Feature 2 · what he says. One line, picked at random, shown in #niko-bubble. Kept as
@@ -113,6 +135,10 @@
     if (!snap) return 'idle'
     if (snap.sources.some(s => !s.ok)) return 'error'
     if (snap.live.busy > 0) return 'busy'
+    // SB: round 2 · Feature 2 · below busy on purpose: while a session is working the owner is
+    // mid-task, and the nudge lands when they come up for air. Above plain waiting, which it is a
+    // sharper version of.
+    if (stalePending(snap) > 0) return 'worried'
     if (snap.pending.total > 0) return 'waiting'
     return 'idle'
   }
@@ -212,6 +238,8 @@
   }
 
   function sayFor (key) {
+    // SB: round 2 · the worried line is the count itself, and held longer so it can be read.
+    if (key === 'worried') { say(wordOf('worried'), 4200); return }
     const list = SAYINGS[key]
     if (list && list.length) say(pick(list))
   }
@@ -282,6 +310,8 @@
     if (NIGHT(hour)) return 'sleep'
     // SB: the quiet timeout only applies to a quiet board. A busy session or a failed source is
     // itself the reason he is moving, so it must not put him to sleep three minutes in.
+    // SB: round 2 · nor does `worried` — a sleeping pet never says the count, and saying it is
+    // the whole nudge.
     if ((mood === 'idle' || mood === 'waiting') && Date.now() - lastEvent > QUIET_MS) return 'sleep'
     maybeChatter()
     const pool = MOVE((MOODS[mood] || MOODS.idle).ambient)
@@ -315,6 +345,7 @@
     const busy = snap.live.busy
     const stale = snap.live.items.filter(s => s.status === 'stale').length
     const pending = snap.pending.total
+    const stalePend = stalePending(snap)
     const next = moodOf(snap)
 
     // A discrete change is the more specific thing to say, so it wins; the mood only speaks when
@@ -332,6 +363,8 @@
       // worth more than a single movement, so it takes the `excited` mood for twelve seconds
       // rather than one `happy` that is over before it is noticed.
       else if (pending < prev.pending) excited = true
+      // SB: round 2 · another slip crossed three days while he was already worried — say the new count.
+      else if (stalePend > prev.stalePend && next === 'worried') { fire(MOODS.worried.enter, wordOf('worried')); sayFor('worried') }
       else if (!bad && busy === 0 && pending === 0 && snap.backlog.total === 0) {
         fire(['dance', 'sleep'], 'board clear')
       } else spoke = false
@@ -346,9 +379,9 @@
     if (!holdUntil) mood = next
 
     if (excited) react('excited', 12000)
-    else if (changed && !spoke) { mood = next; holdUntil = 0; fire(MOODS[next].enter, MOODS[next].word); sayFor(next) }
+    else if (changed && !spoke) { mood = next; holdUntil = 0; fire(MOODS[next].enter, wordOf(next)); sayFor(next) }
 
-    prev = { bad, busy, stale, pending }
+    prev = { bad, busy, stale, pending, stalePend }
   }
 
   // SB: nothing else re-evaluates him between snapshots, and two things drift on their own — the
@@ -363,7 +396,10 @@
     if (next === mood) return
     baseMood = next
     mood = next
-    fire(MOODS[next].enter, MOODS[next].word)
+    // SB: round 2 · this poll is also what notices a slip ageing past three days with no
+    // snapshot change at all, so it speaks the worried line rather than only moving.
+    fire(MOODS[next].enter, wordOf(next))
+    if (next === 'worried') sayFor('worried')
   }, MOOD_POLL_MS)
 
   /* ================= SB: Feature 2 · the interactive half ================= */

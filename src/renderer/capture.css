@@ -1,0 +1,41 @@
+/* SB: round 2 · Feature 1 · quick-capture box. The board's dark tokens, one row of them. */
+
+:root {
+  --ground: #0f0e0c;
+  --hairline: #2b2620;
+  --text-hi: #f5ead8;
+  --text-dim: #8d8375;
+  --accent: #c67139;
+  --accent-hi: #e0955c;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+}
+
+#cap {
+  height: 100%;
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 12px;
+  background: var(--ground);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.dot { width: 7px; height: 7px; background: var(--accent); border-radius: 1.5px; flex: none; }
+
+#text {
+  flex: 1; min-width: 0;
+  font-family: inherit; font-size: 13px; color: var(--text-hi);
+  background: none; border: 0; outline: none; padding: 0;
+}
+#text::placeholder { color: var(--text-dim); }
+
+#state { flex: none; font-size: 10px; color: var(--text-dim); max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#state.bad { color: var(--accent-hi); font-weight: 700; }
