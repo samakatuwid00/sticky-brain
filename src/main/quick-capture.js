@@ -9,8 +9,14 @@ const { toastBoard } = require('./board-toast')
 /* SB: round 2 · Feature 1 · global quick-capture.
 
    Win+Shift+C from anywhere opens a one-line input; Enter writes a pending record into the vault's
-   .inbox/ and the board picks it up like any other. The record is written HERE, in Node, rather
-   than by shelling out to .automation/sb-inbox.ps1: PowerShell takes about a second to start, and
+   .board-inbox/ (paths.boardInbox) and the board picks it up like any other.
+
+   SB: round 3 · it WAS .inbox/. That folder belongs to the consolidate cron, which folds every
+   record it finds into the wiki and moves it to .inbox/done/ — a quick capture written there was
+   gone from the board at the next 10:00 run. .board-inbox/ is the cron-proof twin: only the board
+   reads it, and only the board's mark-done retires a record from it.
+
+   The record is written HERE, in Node, rather than by shelling out to .automation/sb-inbox.ps1: PowerShell takes about a second to start, and
    a capture box that lags behind the keystroke that opened it is one nobody keeps using. The
    format is that script's, field for field — filename stamp, frontmatter, the seven `## `
    sections, CRLF, the same mechanical redaction — so sources/inbox.js and /sb consolidate cannot
@@ -90,11 +96,11 @@ async function write (raw) {
   const stem = local.replace(':', '') + '-' + slugOf(task)
 
   try {
-    await fs.mkdir(paths.inbox, { recursive: true })
+    await fs.mkdir(paths.boardInbox, { recursive: true })
     // `wx` fails on an existing file, so a same-minute collision gets a suffix rather than
     // overwriting a record nobody has consolidated yet — the script's rule, without its race.
     for (let n = 1; n <= 50; n++) {
-      const file = path.join(paths.inbox, stem + (n === 1 ? '' : '-' + n) + '.md')
+      const file = path.join(paths.boardInbox, stem + (n === 1 ? '' : '-' + n) + '.md')
       try {
         await fs.writeFile(file, content, { encoding: 'utf8', flag: 'wx' })
         return { ok: true, file, task, project }
@@ -104,7 +110,7 @@ async function write (raw) {
     }
     return { ok: false, error: 'too many records this minute with that name' }
   } catch (err) {
-    return { ok: false, error: 'could not write .inbox/ (' + (err.code || err.message) + ')' }
+    return { ok: false, error: 'could not write .board-inbox/ (' + (err.code || err.message) + ')' }
   }
 }
 

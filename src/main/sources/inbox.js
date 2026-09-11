@@ -7,6 +7,14 @@ const { paths } = require('../config')
 // One Markdown file per pending capture, written by .automation/sb-inbox.ps1. Fixed frontmatter
 // (type: sb-inbox, createdLocal, status: pending) and fixed `## ` sections. `done/` and
 // `archive-*/` are directories and are skipped by the .md filter below.
+//
+// SB: round 3 · TWO folders, same format, different owners:
+//   .inbox/        (paths.inbox)      — the vault's. The consolidate cron folds every record here
+//                                       into the wiki and moves it to .inbox/done/. Mirrored as-is.
+//   .board-inbox/  (paths.boardInbox) — the board's. Quick-capture writes here; the cron never
+//                                       looks; only the board's mark-done retires a record.
+// Ids carry the folder — `inbox:<file>` vs `binbox:<file>` — so two records with the same name
+// in different folders can never collide, and index.js can tell which folder to retire from.
 
 const SECTIONS = {
   'Task': 'task',
@@ -53,12 +61,20 @@ function parse (text) {
 // to prevent.
 const DONE_PREFIX = 'Mark done: '
 
-async function read () {
+const FOLDERS = [
+  { key: 'inbox', prefix: 'inbox:', dir: () => paths.inbox },
+  { key: 'board', prefix: 'binbox:', dir: () => paths.boardInbox }
+]
+
+// Reads one folder. A missing folder is `{ ok: false }` with the error code; the caller decides
+// what that means (fatal for .inbox/, merely "nothing captured yet" for .board-inbox/).
+async function readFolder (folder) {
+  const dir = folder.dir()
   let names
   try {
-    names = await fs.readdir(paths.inbox)
+    names = await fs.readdir(dir)
   } catch (err) {
-    return { ok: false, path: paths.inbox, error: err.code || 'unreadable', items: [] }
+    return { ok: false, path: dir, error: err.code || 'unreadable', items: [], unparsed: 0, receipts: 0 }
   }
 
   const items = []
@@ -67,7 +83,7 @@ async function read () {
 
   for (const name of names) {
     if (!name.toLowerCase().endsWith('.md')) continue
-    const file = path.join(paths.inbox, name)
+    const file = path.join(dir, name)
     let text
     try { text = await fs.readFile(file, 'utf8') } catch { unparsed++; continue }
 
@@ -76,8 +92,9 @@ async function read () {
     if (r.task.startsWith(DONE_PREFIX)) { receipts++; continue }
 
     items.push({
-      id: 'inbox:' + name,
+      id: folder.prefix + name,
       file,
+      folder: folder.key,
       task: r.task,
       project: r.project || 'unfiled',
       createdLocal: r.createdLocal,
@@ -87,8 +104,32 @@ async function read () {
     })
   }
 
-  items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-  return { ok: true, path: paths.inbox, items, unparsed, receipts }
+  return { ok: true, path: dir, items, unparsed, receipts }
 }
 
-module.exports = { read }
+async function read () {
+  const [vault, board] = await Promise.all(FOLDERS.map(readFolder))
+
+  // SB: .inbox/ unreadable is still the source being down — the board has always said so.
+  // .board-inbox/ not existing yet is not an error: it appears on the first quick-capture.
+  if (!vault.ok) return { ...vault, boardPath: board.path, byFolder: { inbox: vault, board } }
+
+  const items = vault.items.concat(board.ok ? board.items : [])
+  items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+  return {
+    ok: true,
+    path: vault.path,
+    boardPath: board.path,
+    items,
+    unparsed: vault.unparsed + board.unparsed,
+    // Receipts are summed for the PENDING header and kept per folder underneath, so a count that
+    // says "3 done" can always be traced to the folder those three receipts sit in.
+    receipts: vault.receipts + board.receipts,
+    byFolder: {
+      inbox: { ok: vault.ok, path: vault.path, receipts: vault.receipts, unparsed: vault.unparsed, pending: vault.items.length },
+      board: { ok: board.ok, path: board.path, error: board.error || null, receipts: board.receipts, unparsed: board.unparsed, pending: board.items.length }
+    }
+  }
+}
+
+module.exports = { read, FOLDERS }

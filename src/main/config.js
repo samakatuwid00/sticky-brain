@@ -20,6 +20,11 @@ const hermesDir = process.env.STICKY_BRAIN_HERMES || path.join(localAppData, 'he
 const paths = {
   sessions: path.join(claudeDir, 'sessions'),
   inbox: path.join(vaultDir, '.inbox'),
+  // SB: round 3 · the board's OWN capture folder. Quick-capture used to write into .inbox/, and
+  // the Telegram-gateway consolidate cron (.automation/sb-autoconsolidate.py, hard-wired to
+  // .inbox/) folded those records into the wiki at 10:00 and emptied the board. Nothing but the
+  // board reads or retires this folder. Same sb-inbox .md format, so the parser is shared.
+  boardInbox: path.join(vaultDir, '.board-inbox'),
   backlogs: path.join(vaultDir, 'wiki', 'Open Backlogs.md'),
   evidence: path.join(vaultDir, 'wiki', 'Project Change Evidence.md'),
   projects: path.join(vaultDir, '.automation', 'projects.json'),

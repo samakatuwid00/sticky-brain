@@ -243,7 +243,10 @@ function hideToTray () {
 }
 
 function watch () {
-  const targets = [paths.sessions, paths.inbox, paths.backlogs, paths.evidence]
+  // SB: round 3 · .board-inbox/ is created here, before the watcher list is walked, so a fresh
+  // install watches it from the first launch instead of from the first restart after a capture.
+  try { fs.mkdirSync(paths.boardInbox, { recursive: true }) } catch {}
+  const targets = [paths.sessions, paths.inbox, paths.boardInbox, paths.backlogs, paths.evidence]
   for (const target of targets) {
     try {
       // Missing targets are not watched — the snapshot reports them as unavailable instead.
@@ -801,6 +804,10 @@ function recordInVault (info) {
 //   inbox:<file>.md  -> a receipt under .inbox/, written by the vault's own sb-inbox.ps1. The
 //                       original record is NOT moved: .inbox/done/ means "already consolidated"
 //                       and moving there from here would drop it out of the pipeline.
+//   binbox:<file>.md -> SB: round 3 · a quick-capture in .board-inbox/ (see sources/inbox.js).
+//                       Same receipt under .inbox/ (so the cron still files the completion into
+//                       the wiki), THEN the original is moved to .board-inbox/done/ by Node —
+//                       no consolidator ever visits that folder, so nothing else would retire it.
 //   bl:<sha1>        -> the line in wiki/Open Backlogs.md is struck in place.
 //
 // The id carries its own kind, so nothing is trusted from the renderer — the main process
@@ -846,21 +853,41 @@ async function markDone (id) {
     return { ok: true, kind: 'backlog', text: hit.text }
   }
 
-  if (typeof id === 'string' && id.startsWith('inbox:')) {
+  // SB: round 3 · `binbox:` is a quick-capture living in .board-inbox/ rather than .inbox/.
+  if (typeof id === 'string' && (id.startsWith('inbox:') || id.startsWith('binbox:'))) {
     // SB: read the source rather than trusting a renderer-supplied title.
     const got = await inbox.read()
     const item = (got.items || []).find(x => x.id === id)
-    if (!item) return { ok: false, error: 'that pending record is no longer in .inbox/' }
+    const onBoard = !!item && item.folder === 'board'
+    if (!item) return { ok: false, error: 'that pending record is no longer in ' + (id.startsWith('binbox:') ? '.board-inbox/' : '.inbox/') }
+    const base = path.basename(item.file)
     const wrote = await runInbox([
       ['-Task', DONE_PREFIX + item.task],
       ['-Project', item.project || 'sticky-brain'],
       // SB: the file consolidate should retire. Named relative to the vault, as the vault names things.
-      ['-Files', '.inbox/' + path.basename(item.file)],
+      // SB: round 3 · sb-inbox.ps1 always writes the receipt into .inbox/ — `-Files` is only text —
+      // so for a board capture the receipt names where the original is about to be moved to.
+      ['-Files', onBoard ? '.board-inbox/done/' + base : '.inbox/' + base],
       ['-Decisions', 'marked done from the Sticky Brain board'],
-      ['-FollowUps', 'move the original record to .inbox/done/ at the next /sb consolidate'],
+      ['-FollowUps', onBoard
+        ? 'original moved to .board-inbox/done/ by the board itself — no consolidate step needed'
+        : 'move the original record to .inbox/done/ at the next /sb consolidate'],
       ['-NotesUsed', 'wiki/Sticky Brain — Mark Done Action Plan.md']
     ])
     if (!wrote.ok) return { ok: false, error: 'could not write the vault receipt — ' + wrote.error }
+    if (onBoard) {
+      // SB: round 3 · receipt first, move second: a record that vanished without a vault trace is
+      // the one outcome this path must never produce. If the move fails the receipt still stands,
+      // the board hides the row locally, and the file is reported rather than silently left behind.
+      const doneDir = path.join(paths.boardInbox, 'done')
+      try {
+        fs.mkdirSync(doneDir, { recursive: true })
+        fs.renameSync(item.file, path.join(doneDir, base))
+      } catch (err) {
+        console.error('[mark-done] receipt written but could not move ' + base + ' to .board-inbox/done/:', err.message)
+        return { ok: true, kind: 'pending', text: item.task, note: 'receipt written; ' + base + ' is still in .board-inbox/ (' + (err.code || err.message) + ')' }
+      }
+    }
     return { ok: true, kind: 'pending', text: item.task }
   }
 

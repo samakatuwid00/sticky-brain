@@ -75,7 +75,14 @@ async function build () {
     },
     // SB: receipts are mark-done records filtered out of `items` by inbox.js — carried so the
     // PENDING header can show them rather than letting them vanish silently.
-    pending: { items: pendingSorted.slice(0, MAX_PENDING), total: pendingSorted.length, receipts: i.receipts || 0 },
+    pending: {
+      items: pendingSorted.slice(0, MAX_PENDING),
+      total: pendingSorted.length,
+      receipts: i.receipts || 0,
+      // SB: round 3 · per-folder truth behind the summed `receipts` — .inbox/ (cron's) and
+      // .board-inbox/ (the board's own, see sources/inbox.js).
+      byFolder: i.byFolder || null
+    },
     backlog: {
       groups: sentGroups,
       groupCount: groupsAll.length,
