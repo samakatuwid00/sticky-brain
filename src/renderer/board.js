@@ -240,7 +240,10 @@ function sessionRow (s) {
   const badge = el('span', 'ag ' + (s.agent || 'claude'), agent.badge)
   badge.title = agent.full
   row.append(badge)
-  row.append(el('span', 'nm', s.name))
+  // A Hermes title can be the whole first prompt; it is clamped to one line in CSS, full on hover.
+  const nm = el('span', 'nm', s.name)
+  nm.title = s.name
+  row.append(nm)
   row.append(el('span', 'cwd', '· ' + (s.project || '~')))
   row.append(el('span', 'el', rel(s.startedAt)))
   row.append(el('span', 'drift',

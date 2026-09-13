@@ -173,7 +173,10 @@ body.niko-only #niko-rail.ghost { opacity: 1; }
 }
 .row:hover { background: var(--hover); }
 .row:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: -2px; }
-.row .nm { font-size: var(--t2); font-weight: 600; color: var(--text-hi); }
+.row .nm {
+  font-size: var(--t2); font-weight: 600; color: var(--text-hi);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .row .cwd {
   font-size: var(--t3); color: var(--text-dim);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
