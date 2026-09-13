@@ -183,7 +183,19 @@ async function read () {
 
 // SB: the plan's task dispatch. See note 3 at the top — on Hermes 0.19.1 this returns
 // `unsupported`, and index.js treats that as "use the next launcher", not as a failure to report.
+//
+// SB: when POST /api/sessions returns 404/405 (unsupported), the Hermes build doesn't expose
+// that endpoint and won't until it's upgraded. Caching this avoids the full port-sweep + HTTP
+// probe cycle on every subsequent click — the read() call alone takes 2-5s via PowerShell.
+const UNSUPPORTED_TTL = 5 * 60 * 1000  // 5 minutes — safe across app lifetime
+let unsupportedAt = 0
+
 async function startTask (task) {
+  // Fast-path: if the last POST was unsupported, skip the expensive read() + probe cycle.
+  if (unsupportedAt && (Date.now() - unsupportedAt) < UNSUPPORTED_TTL) {
+    return { ok: false, reason: 'unsupported', detail: 'cached — POST /api/sessions is unsupported' }
+  }
+
   const state = await read()
   if (!state.ok) return { ok: false, reason: 'offline', detail: state.error }
   if (!state.authorized) return { ok: false, reason: 'unauthorized', detail: state.error }
@@ -198,8 +210,9 @@ async function startTask (task) {
       source: 'sticky-brain'
     }
   })
-  if (r.ok) return { ok: true, base: state.base, session: r.json }
+  if (r.ok) { unsupportedAt = 0; return { ok: true, base: state.base, session: r.json } }
   if (r.status === 404 || r.status === 405) {
+    unsupportedAt = Date.now()
     return { ok: false, reason: 'unsupported', detail: 'this hermes build exposes GET /api/sessions only' }
   }
   if (r.status === 401 || r.status === 403) {

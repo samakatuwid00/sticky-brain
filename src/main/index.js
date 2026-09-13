@@ -1075,16 +1075,23 @@ function submitHeadless (bin, prompt, cwd) {
 ipcMain.handle('board:openTaskChat', async (_e, data) => {
   const info = data || {}
   const prompt = taskPrompt(info)
+  const vault = config.vault()
   const cwd = info.sourceFile && fs.existsSync(path.dirname(info.sourceFile))
     ? path.dirname(info.sourceFile)
-    : vaultDir
+    : (vault && fs.existsSync(vault) ? vault : config.home)
 
   // Durable vault record first (sanctioned path) — unchanged, and deliberately still before any
   // launcher runs, so the trace exists even if every one of them fails.
   recordInVault(info)
 
-  // 1 · the local backend, as the plan specifies.
-  const viaApi = await hermesApi.startTask({ prompt, skills: HERMES_SKILL_LIST, cwd })
+  // SB: fire API probe and CLI path lookup in parallel — the API port sweep (PowerShell) and
+  // HTTP probes take 3-10s when the backend is offline, which it usually is. Running them
+  // concurrently means cliPath resolves from its 15s tasklist cache while the API either
+  // succeeds or times out, cutting the worst-case click-to-response from ~12s to ~4s.
+  const [viaApi, bin] = await Promise.all([
+    hermesApi.startTask({ prompt, skills: HERMES_SKILL_LIST, cwd }),
+    hermesRuntime.cliPath()
+  ])
   if (viaApi.ok) {
     const d = await focusHermesDesktop()
     return { ok: true, mode: 'api', submitted: true, focused: d.ok, note: d.ok ? null : d.error }
@@ -1095,7 +1102,6 @@ ipcMain.handle('board:openTaskChat', async (_e, data) => {
   }
 
   // 2 · headless `hermes chat -q`, which is what actually answers on this machine.
-  const bin = await hermesRuntime.cliPath()
   if (bin) {
     const started = await submitHeadless(bin, prompt, cwd)
     if (started.ok) {
